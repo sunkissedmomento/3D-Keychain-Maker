@@ -2,231 +2,237 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader";
 import { STLExporter } from "three/examples/jsm/exporters/STLExporter";
-import { mergeGeometries, mergeVertices } from "three/examples/jsm/utils/BufferGeometryUtils";
+import { OBJExporter } from "three/examples/jsm/exporters/OBJExporter";
+import {
+  mergeGeometries,
+  mergeVertices,
+} from "three/examples/jsm/utils/BufferGeometryUtils";
 import opentype from "opentype.js";
 import ClipperLib from "clipper-lib";
 
-// ─── Defaults ─────────────────────────────────────────────────────────────────
+// ─── Defaults ────────────────────────────────────────────────────────────────
 const DEFAULTS = {
-  name: "Chedz", font: "Pacifico:style=Regular",
-  textSize: 15, textHeight: 3.0, borderHeight: 2.0, borderOffset: 3.0,
-  gap: 0, tabDiameter: 8.0, holeDiameter: 4.0, tabYOffset: 0.0,
-  borderColor: "#f9a8d4", textColor: "#c084fc",
+  name: "Chedz",
+  font: "Pacifico:style=Regular",
+  textSize: 15,
+  textHeight: 3.0,
+  borderHeight: 2.0,
+  borderOffset: 3.0,
+  gap: 0,
+  tabDiameter: 8.0,
+  holeDiameter: 4.0,
+  tabYOffset: 0.0,
+  borderColor: "#f9a8d4",
+  textColor: "#c084fc",
 };
+
+// ─── localStorage color persistence ──────────────────────────────────────────
+const STORAGE_KEY = "keychain_colors_v1";
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+function readSavedColors() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    return {
+      borderColor: HEX_RE.test(p?.borderColor) ? p.borderColor : null,
+      textColor: HEX_RE.test(p?.textColor) ? p.textColor : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistColors(borderColor, textColor) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ borderColor, textColor }));
+  } catch {}
+}
 
 const FONT_URLS = {
   "Pacifico:style=Regular": "/fonts/Pacifico-Regular.ttf",
   "Lobster:style=Regular": "/fonts/Lobster-Regular.ttf",
   "Titan One:style=Regular": "/fonts/TitanOne-Regular.ttf",
   "Luckiest Guy:style=Regular": "/fonts/LuckiestGuy-Regular.ttf",
-  "Bhineka:style=Regular": "/fonts/Bhineka-Regular.ttf",
 };
-
-// ─── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "keychain_colors_v1";
-const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-async function readSavedColors() {
-  try {
-    const r = await window.storage.get(STORAGE_KEY);
-    if (!r) return null;
-    const p = JSON.parse(r.value);
-    return { borderColor: HEX_RE.test(p?.borderColor) ? p.borderColor : null, textColor: HEX_RE.test(p?.textColor) ? p.textColor : null };
-  } catch { return null; }
-}
-async function persistColors(bc, tc) {
-  try { await window.storage.set(STORAGE_KEY, JSON.stringify({ borderColor: bc, textColor: tc })); } catch {}
-}
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 const LIGHT = {
-  bg: "#fdf6f0", surface: "#ffffff", border: "#f0e6df", text: "#5c3d6b",
-  muted: "#b89ec4", accent: "#f472b6", accent2: "#c084fc",
-  trackBg: "#f5e6f0", pill: "#fce7f3", pillText: "#e879a0",
-  inputBg: "#fff8fc", inputBorder: "#edd5f0",
-  sceneBg: 0xe8d5f0, shadow: "#f9a8d428", shadow2: "#c084fc18",
-  blob1: "#fce7f338", blob2: "#e9d5ff38",
+  bg: "#fdf6f0", surface: "#ffffff", border: "#f0e6df", text: "#6b4c6b",
+  muted: "#c4a8c4", accent: "#f472b6", accent2: "#c084fc", trackBg: "#f5e6f0",
+  valuePill: "#fce7f3", resetHov: "#fce7f3", inputBg: "#fff8fc",
+  sceneBg: 0xfdf0f8, blob1: "#fce7f340", blob2: "#e9d5ff40",
+  shadow: "#f9a8d420", shadow2: "#c084fc20",
 };
 const DARK = {
-  bg: "#16101f", surface: "#201530", border: "#2e1f42", text: "#ead6f8",
-  muted: "#7a5a9a", accent: "#f472b6", accent2: "#c084fc",
-  trackBg: "#2e1d3a", pill: "#3a1f52", pillText: "#e879f9",
-  inputBg: "#1a1028", inputBorder: "#3a2050",
-  sceneBg: 0x1a0f2e, shadow: "#f9a8d418", shadow2: "#c084fc14",
-  blob1: "#f472b612", blob2: "#c084fc12",
+  bg: "#18111e", surface: "#221830", border: "#2e2040", text: "#e9d5f5",
+  muted: "#7c5fa0", accent: "#f472b6", accent2: "#c084fc", trackBg: "#2e1d3a",
+  valuePill: "#3d1f4a", resetHov: "#3d1f4a", inputBg: "#1e1428",
+  sceneBg: 0x140d1e, blob1: "#f472b615", blob2: "#c084fc15",
+  shadow: "#f9a8d415", shadow2: "#c084fc15",
 };
 
-// ─── Geometry ─────────────────────────────────────────────────────────────────
+// ─── Geometry helpers ─────────────────────────────────────────────────────────
 const SCALE = 1000;
-const toCP = p => p.map(([x,y]) => ({ X: Math.round(x*SCALE), Y: Math.round(y*SCALE) }));
-const fromCP = p => p.map(v => [v.X/SCALE, v.Y/SCALE]);
+const toClipperPath = (poly) =>
+  poly.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }));
+const fromClipperPoly = (poly) => poly.map((p) => [p.X / SCALE, p.Y / SCALE]);
 
-function shapeToOuterPaths(shape, q=60) {
-  const pts = shape.getPoints(q);
-  return pts.length >= 3 ? [pts.map(p=>[p.x,p.y])] : [];
+function shapeToOuterPathsOnly(shape, quality = 60) {
+  const pts = shape.getPoints(quality);
+  return pts.length >= 3 ? [pts.map((p) => [p.x, p.y])] : [];
 }
-function offsetUnion(paths, delta) {
-  const co = new ClipperLib.ClipperOffset(2, 0.75*SCALE);
-  co.AddPaths(paths.map(toCP), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
-  const off = new ClipperLib.Paths(); co.Execute(off, delta*SCALE);
-  const c = new ClipperLib.Clipper(); c.AddPaths(off, ClipperLib.PolyType.ptSubject, true);
+
+function offsetUnion(paths, deltaMm) {
+  const subj = paths.map(toClipperPath);
+  const co = new ClipperLib.ClipperOffset(2, 0.75 * SCALE);
+  co.AddPaths(subj, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+  const off = new ClipperLib.Paths();
+  co.Execute(off, deltaMm * SCALE);
+  const c = new ClipperLib.Clipper();
+  c.AddPaths(off, ClipperLib.PolyType.ptSubject, true);
   const sol = new ClipperLib.Paths();
   c.Execute(ClipperLib.ClipType.ctUnion, sol, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
-  return sol.map(fromCP);
-}
-function signedArea(poly) { let a=0; for(let i=0;i<poly.length;i++){const[x1,y1]=poly[i],[x2,y2]=poly[(i+1)%poly.length];a+=x1*y2-x2*y1;} return a/2; }
-function ensureCCW(poly) { return signedArea(poly)<0?poly.slice().reverse():poly; }
-function polysToShapes(polys) { return polys.filter(p=>p&&p.length>=3).map(p=>new THREE.Shape(ensureCCW(p).map(([x,y])=>new THREE.Vector2(x,y)))); }
-function makeTabGeo(tabR, holeR, h, segs=48) {
-  const s=new THREE.Shape(); s.absarc(0,0,tabR,0,Math.PI*2,true);
-  const hole=new THREE.Path(); hole.absarc(0,0,holeR,0,Math.PI*2,false); s.holes.push(hole);
-  return new THREE.ExtrudeGeometry(s,{depth:h,bevelEnabled:false,curveSegments:segs});
-}
-function cleanGeo(geo, weld=1e-4, eps=1e-10) {
-  let g=mergeVertices(geo.clone(),weld);
-  const non=g.toNonIndexed(),pos=non.attributes.position,kept=[];
-  const a=new THREE.Vector3(),b=new THREE.Vector3(),c=new THREE.Vector3(),ab=new THREE.Vector3(),ac=new THREE.Vector3(),cr=new THREE.Vector3();
-  for(let i=0;i<pos.count;i+=3){
-    a.set(pos.getX(i),pos.getY(i),pos.getZ(i));b.set(pos.getX(i+1),pos.getY(i+1),pos.getZ(i+1));c.set(pos.getX(i+2),pos.getY(i+2),pos.getZ(i+2));
-    ab.subVectors(b,a);ac.subVectors(c,a);cr.crossVectors(ab,ac);
-    if(cr.lengthSq()>eps)kept.push(a.x,a.y,a.z,b.x,b.y,b.z,c.x,c.y,c.z);
-  }
-  const out=new THREE.BufferGeometry(); out.setAttribute("position",new THREE.BufferAttribute(new Float32Array(kept),3));
-  let w=mergeVertices(out,weld); w.computeVertexNormals(); w.computeBoundingBox(); w.computeBoundingSphere(); return w;
+  return sol.map(fromClipperPoly);
 }
 
-function useDebounce(v, d) {
-  const [dv,setDv]=useState(v);
-  useEffect(()=>{const t=setTimeout(()=>setDv(v),d);return()=>clearTimeout(t);},[v,d]);
+function signedArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const [x1, y1] = poly[i], [x2, y2] = poly[(i + 1) % poly.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return a / 2;
+}
+
+function ensureCCW(poly) {
+  return signedArea(poly) < 0 ? poly.slice().reverse() : poly;
+}
+
+function polysToShapes(polys) {
+  return polys
+    .filter((p) => p && p.length >= 3)
+    .map((p) => new THREE.Shape(ensureCCW(p).map(([x, y]) => new THREE.Vector2(x, y))));
+}
+
+function makeRingTabGeometry(tabR, holeR, height, segs = 48) {
+  const outer = new THREE.Shape();
+  outer.absarc(0, 0, tabR, 0, Math.PI * 2, true);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, holeR, 0, Math.PI * 2, false);
+  outer.holes.push(hole);
+  return new THREE.ExtrudeGeometry(outer, { depth: height, bevelEnabled: false, curveSegments: segs });
+}
+
+function cleanForExport(geo, weldTol = 1e-4, areaEps = 1e-10) {
+  let g = geo.clone();
+  g = mergeVertices(g, weldTol);
+  const non = g.toNonIndexed();
+  const pos = non.attributes.position;
+  const kept = [];
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), cross = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i += 3) {
+    a.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+    b.set(pos.getX(i + 1), pos.getY(i + 1), pos.getZ(i + 1));
+    c.set(pos.getX(i + 2), pos.getY(i + 2), pos.getZ(i + 2));
+    ab.subVectors(b, a); ac.subVectors(c, a); cross.crossVectors(ab, ac);
+    if (cross.lengthSq() > areaEps)
+      kept.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute("position", new THREE.BufferAttribute(new Float32Array(kept), 3));
+  let welded = mergeVertices(out, weldTol);
+  welded.computeVertexNormals();
+  welded.computeBoundingBox();
+  welded.computeBoundingSphere();
+  return welded;
+}
+
+// ─── OBJ + STL only exports ─────────────────────────────────────────────────
+
+// ─── Hooks ────────────────────────────────────────────────────────────────────
+function useDebounce(value, delay) {
+  const [dv, setDv] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDv(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
   return dv;
 }
 
-// ─── UI Primitives ────────────────────────────────────────────────────────────
-function ResetBtn({ onClick, C }) {
-  const [hov,setHov]=useState(false);
+// ─── UI components ────────────────────────────────────────────────────────────
+function ResetBtn({ onClick, title, C }) {
+  const [hov, setHov] = useState(false);
   return (
-    <button onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      title="Reset to default"
-      style={{ background:hov?C.pill:"none", border:"none", borderRadius:"50%", width:18, height:18, display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:11, color:hov?C.accent:C.muted, transition:"all 0.15s", padding:0, flexShrink:0 }}>
+    <button onClick={onClick} title={title}
+      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{ background: hov ? C.resetHov : "none", border: "none", borderRadius: "50%", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 11, color: hov ? C.accent : C.muted, transition: "all 0.15s", padding: 0, flexShrink: 0 }}>
       ↺
     </button>
   );
 }
 
-function FieldLabel({ children, dirty, onReset, C }) {
-  return (
-    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:7 }}>
-      <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{children}</span>
-      {dirty && <ResetBtn onClick={onReset} C={C} />}
-    </div>
-  );
-}
-
-function SliderRow({ label, value, min, max, step=1, unit="mm", onChange, defaultValue, C }) {
-  const dirty = value !== defaultValue;
-  const bipolar = min < 0 && max > 0;
-  const zeroPct = (-min / (max - min)) * 100;
-  const valPct = ((value - min) / (max - min)) * 100;
-  const fillLeft = bipolar ? Math.min(zeroPct, valPct) : 0;
-  const fillWidth = bipolar ? Math.abs(valPct - zeroPct) : valPct;
-  return (
-    <div style={{ marginBottom:16 }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:7 }}>
-        <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</span>
-        <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-          <span style={{ fontSize:12, fontFamily:"'DM Mono',monospace", color:dirty?C.pillText:C.muted, background:dirty?C.pill:"transparent", padding:dirty?"2px 8px":"0", borderRadius:20, transition:"all 0.15s" }}>
-            {bipolar && value > 0 ? `+${value}` : value}{unit}
-          </span>
-          {dirty && <ResetBtn onClick={()=>onChange(defaultValue)} C={C} />}
-        </div>
-      </div>
-      <div style={{ position:"relative", height:5, borderRadius:5, background:C.trackBg }}>
-        {bipolar && <div style={{ position:"absolute", left:`${zeroPct}%`, top:0, width:1, height:"100%", background:C.muted, opacity:0.35, transform:"translateX(-50%)" }} />}
-        <div style={{ position:"absolute", left:`${fillLeft}%`, top:0, height:"100%", width:`${fillWidth}%`, borderRadius:5, background:`linear-gradient(90deg,${C.accent},${C.accent2})` }} />
-        <input type="range" min={min} max={max} step={step} value={value}
-          onInput={e=>onChange(+e.target.value)}
-          style={{ position:"absolute", inset:0, width:"100%", height:"100%", opacity:0, cursor:"pointer", margin:0 }} />
-      </div>
-    </div>
-  );
-}
-
-function SectionHeader({ label, C }) {
-  return (
-    <div style={{ display:"flex", alignItems:"center", gap:8, margin:"20px 0 12px" }}>
-      <div style={{ height:1, flex:1, background:`linear-gradient(90deg,${C.accent}50,transparent)` }} />
-      <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.18em", textTransform:"uppercase", color:C.accent }}>{label}</span>
-      <div style={{ height:1, flex:1, background:`linear-gradient(270deg,${C.accent}50,transparent)` }} />
-    </div>
-  );
-}
-
-// FIX 1: Bigger swatch (44x44), clearer label with tooltip
-function ColorRow({ label, value, defaultValue, onChange, C, tooltip }) {
+function SliderRow({ label, value, min, max, step = 1, unit = "mm", onChange, defaultValue, C }) {
+  const pct = ((value - min) / (max - min)) * 100;
   const dirty = value !== defaultValue;
   return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
-      <div>
-        <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</span>
-        {tooltip && <div style={{ fontSize:10, color:C.muted, marginTop:2, fontWeight:400, textTransform:"none", letterSpacing:0 }}>{tooltip}</div>}
-      </div>
-      <div style={{ display:"flex", alignItems:"center", gap:7 }}>
-        {dirty && <ResetBtn onClick={()=>onChange(defaultValue)} C={C} />}
-        <span style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:dirty?C.text:C.muted }}>{value.toUpperCase()}</span>
-        {/* FIX 1: swatch 44x44 for easier clicking */}
-        <div style={{ width:44, height:44, borderRadius:11, background:value, border:`2.5px solid ${dirty?value:C.border}`, boxShadow:`0 2px 10px ${value}70`, overflow:"hidden", cursor:"pointer", position:"relative", flexShrink:0, transition:"box-shadow 0.2s" }}>
-          <input type="color" value={value} onChange={e=>onChange(e.target.value)}
-            style={{ position:"absolute", inset:"-6px", width:"calc(100% + 12px)", height:"calc(100% + 12px)", opacity:0, cursor:"pointer" }} />
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: C.muted, fontWeight: 500 }}>{label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 12, background: C.valuePill, color: C.accent, borderRadius: 8, padding: "1px 8px", fontFamily: "'DM Mono',monospace", fontWeight: 600 }}>{value} {unit}</span>
+          {dirty && <ResetBtn onClick={() => onChange(defaultValue)} title={`Reset to ${defaultValue}${unit}`} C={C} />}
         </div>
+      </div>
+      <div style={{ position: "relative", height: 6, borderRadius: 3, background: C.trackBg }}>
+        <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${pct}%`, borderRadius: 3, background: `linear-gradient(90deg,${C.accent},${C.accent2})`, pointerEvents: "none" }} />
+        <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(+e.target.value)}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: 0, cursor: "pointer", margin: 0 }} />
       </div>
     </div>
   );
 }
 
-// ─── Export Modal ─────────────────────────────────────────────────────────────
-function ExportModal({ defaultName, format, onConfirm, onCancel, C }) {
-  const [val, setVal] = useState(defaultName);
-  const ref = useRef();
-  useEffect(()=>{ setTimeout(()=>ref.current?.select(), 50); }, []);
-
+function Section({ label, C }) {
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", backdropFilter:"blur(6px)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
-      <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:20, padding:"28px 26px 22px", width:340, boxShadow:`0 24px 64px rgba(0,0,0,0.3)` }}>
-        <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:6 }}>Name your {format} export</div>
-        <div style={{ fontSize:12, color:C.muted, marginBottom:18, lineHeight:1.5 }}>
-          {format === "OBJ"
-            ? <>Both <code style={{ background:C.trackBg, padding:"1px 5px", borderRadius:4, fontSize:11 }}>.obj</code> and <code style={{ background:C.trackBg, padding:"1px 5px", borderRadius:4, fontSize:11 }}>.mtl</code> will use this name so they always match.</>
-            : "Your file will be saved with this name."}
+    <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "14px 0 8px" }}>
+      <div style={{ flex: 1, height: 1, background: C.border }} />
+      <span style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: 1.5, textTransform: "uppercase" }}>{label}</span>
+      <div style={{ flex: 1, height: 1, background: C.border }} />
+    </div>
+  );
+}
+
+function ColorPicker({ label, value, defaultValue, onChange, C }) {
+  const dirty = value !== defaultValue;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+        <span style={{ fontSize: 12, color: C.muted, fontWeight: 500 }}>{label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {dirty && <ResetBtn onClick={() => onChange(defaultValue)} title={`Reset to ${defaultValue}`} C={C} />}
+          <span style={{ fontSize: 11, color: C.muted, fontFamily: "'DM Mono',monospace" }}>{value.toUpperCase()}</span>
         </div>
-        <input ref={ref} value={val} onChange={e=>setVal(e.target.value.replace(/[^a-zA-Z0-9 _-]/g,""))}
-          onKeyDown={e=>{ if(e.key==="Enter"&&val.trim()) onConfirm(val.trim()); if(e.key==="Escape") onCancel(); }}
-          maxLength={48}
-          style={{ width:"100%", padding:"10px 13px", background:C.inputBg, border:`1.5px solid ${C.accent2}`, borderRadius:11, color:C.text, fontSize:14, fontFamily:"inherit", outline:"none", marginBottom:18 }} />
-        <div style={{ display:"flex", gap:10 }}>
-          <button onClick={onCancel}
-            style={{ flex:1, padding:"10px 0", borderRadius:11, border:`1.5px solid ${C.border}`, background:"none", color:C.muted, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
-            Cancel
-          </button>
-          <button onClick={()=>val.trim()&&onConfirm(val.trim())} disabled={!val.trim()}
-            style={{ flex:2, padding:"10px 0", borderRadius:11, border:"none", background:`linear-gradient(135deg,${C.accent},${C.accent2})`, color:"#fff", fontSize:13, fontWeight:700, cursor:val.trim()?"pointer":"not-allowed", fontFamily:"inherit", opacity:val.trim()?1:0.5, boxShadow:`0 4px 16px ${C.shadow}` }}>
-            Download {format}
-          </button>
-        </div>
+      </div>
+      <div style={{ position: "relative", width: "100%", height: 36, borderRadius: 10, overflow: "hidden", border: `1.5px solid ${C.border}`, background: value, cursor: "pointer" }}>
+        <input type="color" value={value} onChange={(e) => onChange(e.target.value)}
+          style={{ position: "absolute", inset: 0, width: "200%", height: "200%", opacity: 0, cursor: "pointer", border: "none", padding: 0 }} />
       </div>
     </div>
   );
 }
+
+// ─── Read saved colors once at module load (before any React render) ─────────
+// Must be outside the component — useState(initialValue) only uses initialValue
+// on the very first render, but if readSavedColors() is called inside the
+// component body it re-runs on every render and can race with React's batching.
+const _SAVED_COLORS = readSavedColors();
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [darkMode, setDarkMode] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = e => setDarkMode(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
-  const C = darkMode ? DARK : LIGHT;
-
+  const [darkMode, setDarkMode] = useState(false);
   const [name, setName] = useState(DEFAULTS.name);
   const [font, setFont] = useState(DEFAULTS.font);
   const [textSize, setTextSize] = useState(DEFAULTS.textSize);
@@ -237,16 +243,14 @@ export default function App() {
   const [tabDiameter, setTabDiameter] = useState(DEFAULTS.tabDiameter);
   const [holeDiameter, setHoleDiameter] = useState(DEFAULTS.holeDiameter);
   const [tabYOffset, setTabYOffset] = useState(DEFAULTS.tabYOffset);
-  const [borderColor, setBorderColor] = useState(DEFAULTS.borderColor);
-  const [textColor, setTextColor] = useState(DEFAULTS.textColor);
-  const [colorsLoaded, setColorsLoaded] = useState(false);
+  const [borderColor, setBorderColor] = useState(_SAVED_COLORS?.borderColor ?? DEFAULTS.borderColor);
+  const [textColor, setTextColor] = useState(_SAVED_COLORS?.textColor ?? DEFAULTS.textColor);
   const [fontsReady, setFontsReady] = useState(false);
   const [status, setStatus] = useState("loading");
-  const [exporting, setExporting] = useState(false);
-  const [exportModal, setExportModal] = useState(null);
 
-  useEffect(() => { readSavedColors().then(s => { if(s?.borderColor) setBorderColor(s.borderColor); if(s?.textColor) setTextColor(s.textColor); setColorsLoaded(true); }); }, []);
-  useEffect(() => { if(colorsLoaded) persistColors(borderColor, textColor); }, [borderColor, textColor, colorsLoaded]);
+  const C = darkMode ? DARK : LIGHT;
+
+  useEffect(() => { persistColors(borderColor, textColor); }, [borderColor, textColor]);
 
   const dName = useDebounce(name, 200);
   const dTextSize = useDebounce(textSize, 80);
@@ -254,336 +258,416 @@ export default function App() {
   const dBorderHeight = useDebounce(borderHeight, 80);
   const dBorderOffset = useDebounce(borderOffset, 80);
   const dGap = useDebounce(gap, 80);
-  const dTabD = useDebounce(tabDiameter, 80);
-  const dHoleD = useDebounce(holeDiameter, 80);
-  const dTabY = useDebounce(tabYOffset, 80);
-
-  const safeName = useMemo(() => dName.replace(/[^a-zA-Z0-9 _-]/g,"").slice(0,20), [dName]);
-  const suggestedName = `${safeName}_${font.split(":")[0]}`;
-
-  const anyDirty = useMemo(() => {
-    const v={name,font,textSize,textHeight,borderHeight,borderOffset,gap,tabDiameter,holeDiameter,tabYOffset,borderColor,textColor};
-    return Object.keys(DEFAULTS).some(k=>v[k]!==DEFAULTS[k]);
-  }, [name,font,textSize,textHeight,borderHeight,borderOffset,gap,tabDiameter,holeDiameter,tabYOffset,borderColor,textColor]);
-
-  const resetAll = useCallback(() => {
-    setName(DEFAULTS.name); setFont(DEFAULTS.font); setTextSize(DEFAULTS.textSize); setTextHeight(DEFAULTS.textHeight);
-    setBorderHeight(DEFAULTS.borderHeight); setBorderOffset(DEFAULTS.borderOffset); setGap(DEFAULTS.gap);
-    setTabDiameter(DEFAULTS.tabDiameter); setHoleDiameter(DEFAULTS.holeDiameter); setTabYOffset(DEFAULTS.tabYOffset);
-    setBorderColor(DEFAULTS.borderColor); setTextColor(DEFAULTS.textColor);
-  }, []);
+  const dTabDiameter = useDebounce(tabDiameter, 80);
+  const dHoleDiameter = useDebounce(holeDiameter, 80);
+  const dTabYOffset = useDebounce(tabYOffset, 80);
 
   const canvasRef = useRef(null);
   const cameraRef = useRef(null);
   const rendererRef = useRef(null);
   const controlsRef = useRef(null);
   const animRef = useRef(null);
-  const groupRef = useRef(null);
+  const previewGroupRef = useRef(null);
   const sceneRef = useRef(null);
   const fontCacheRef = useRef({});
-  const exportGeoRef = useRef({ base:null, tab:null, text:null });
-  const meshRef = useRef({ base:null, tab:null, text:null });
+  const exportGeomsRef = useRef({ base: null, text: null, tab: null });
+  const meshRefsRef = useRef({ base: null, tab: null, text: null });
 
-  useEffect(() => { if(sceneRef.current) sceneRef.current.background.set(C.sceneBg); }, [darkMode, C.sceneBg]);
+  const safeName = useMemo(() => dName.replace(/[^a-zA-Z0-9 _-]/g, "").slice(0, 20), [dName]);
 
-  // Three.js init
+  const anyDirty = useMemo(() => {
+    const v = { name, font, textSize, textHeight, borderHeight, borderOffset, gap, tabDiameter, holeDiameter, tabYOffset, borderColor, textColor };
+    return Object.keys(DEFAULTS).some((k) => v[k] !== DEFAULTS[k]);
+  }, [name, font, textSize, textHeight, borderHeight, borderOffset, gap, tabDiameter, holeDiameter, tabYOffset, borderColor, textColor]);
+
+  const resetAll = useCallback(() => {
+    setName(DEFAULTS.name); setFont(DEFAULTS.font); setTextSize(DEFAULTS.textSize);
+    setTextHeight(DEFAULTS.textHeight); setBorderHeight(DEFAULTS.borderHeight);
+    setBorderOffset(DEFAULTS.borderOffset); setGap(DEFAULTS.gap);
+    setTabDiameter(DEFAULTS.tabDiameter); setHoleDiameter(DEFAULTS.holeDiameter);
+    setTabYOffset(DEFAULTS.tabYOffset); setBorderColor(DEFAULTS.borderColor);
+    setTextColor(DEFAULTS.textColor);
+  }, []);
+
   useEffect(() => {
-    const el = canvasRef.current; if(!el) return;
-    const scene = new THREE.Scene(); scene.background = new THREE.Color(LIGHT.sceneBg); sceneRef.current = scene;
-    const camera = new THREE.PerspectiveCamera(50, el.clientWidth/el.clientHeight, 0.1, 5000);
-    camera.position.set(0,0,140); cameraRef.current = camera;
-    const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    if (sceneRef.current) sceneRef.current.background.set(C.sceneBg);
+  }, [darkMode, C.sceneBg]);
+
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(LIGHT.sceneBg);
+    sceneRef.current = scene;
+    const camera = new THREE.PerspectiveCamera(50, el.clientWidth / el.clientHeight, 0.1, 5000);
+    camera.position.set(0, 0, 140);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(el.clientWidth, el.clientHeight);
-    el.appendChild(renderer.domElement); rendererRef.current = renderer;
-    scene.add(new THREE.AmbientLight(0xffffff,0.7));
-    const d=new THREE.DirectionalLight(0xffffff,0.8); d.position.set(20,30,25); scene.add(d);
-    const f=new THREE.DirectionalLight(0xffccee,0.4); f.position.set(-20,-10,10); scene.add(f);
-    import("three/examples/jsm/controls/OrbitControls").then(({OrbitControls})=>{
-      const ctrl=new OrbitControls(camera,renderer.domElement); ctrl.enableDamping=true; ctrl.dampingFactor=0.08; controlsRef.current=ctrl;
+    el.appendChild(renderer.domElement);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(20, 30, 25); scene.add(dir);
+    const fill = new THREE.DirectionalLight(0xffccee, 0.4);
+    fill.position.set(-20, -10, 10); scene.add(fill);
+    import("three/examples/jsm/controls/OrbitControls").then(({ OrbitControls }) => {
+      const ctrl = new OrbitControls(camera, renderer.domElement);
+      ctrl.enableDamping = true; ctrl.dampingFactor = 0.08;
+      controlsRef.current = ctrl;
     });
-    const g=new THREE.Group(); scene.add(g); groupRef.current=g;
-    let last=0;
-    const tick=t=>{ animRef.current=requestAnimationFrame(tick); if(document.hidden||t-last<14)return; last=t; controlsRef.current?.update(); renderer.render(scene,camera); };
-    tick(0);
-    const onResize=()=>{ const w=el.clientWidth,h=el.clientHeight; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); };
-    window.addEventListener("resize",onResize);
-    return ()=>{ window.removeEventListener("resize",onResize); cancelAnimationFrame(animRef.current); controlsRef.current?.dispose(); renderer.dispose(); renderer.domElement.remove(); };
+    const pg = new THREE.Group();
+    scene.add(pg);
+    cameraRef.current = camera; rendererRef.current = renderer; previewGroupRef.current = pg;
+    let lastTime = 0;
+    const animate = (t) => {
+      animRef.current = requestAnimationFrame(animate);
+      if (document.hidden || t - lastTime < 14) return;
+      lastTime = t; controlsRef.current?.update(); renderer.render(scene, camera);
+    };
+    animate(0);
+    const onResize = () => {
+      const w = el.clientWidth, h = el.clientHeight;
+      camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(animRef.current);
+      controlsRef.current?.dispose(); renderer.dispose(); renderer.domElement.remove();
+    };
   }, []);
 
-  // Font load
-  useEffect(()=>{
-    let alive=true;
-    (async()=>{
-      try{
-        for(const k of Object.keys(FONT_URLS)){ const r=await fetch(FONT_URLS[k]); if(!r.ok) throw new Error("Font 404"); fontCacheRef.current[k]=opentype.parse(await r.arrayBuffer()); if(!alive)return; }
-        if(alive){setFontsReady(true);setStatus("ready");}
-      }catch(e){console.error(e);setStatus("error");}
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        for (const k of Object.keys(FONT_URLS)) {
+          const r = await fetch(FONT_URLS[k]);
+          if (!r.ok) throw new Error(`Font 404: ${FONT_URLS[k]}`);
+          fontCacheRef.current[k] = opentype.parse(await r.arrayBuffer());
+          if (!alive) return;
+        }
+        if (alive) { setFontsReady(true); setStatus("ready"); }
+      } catch (e) { console.error(e); setStatus("error"); }
     })();
-    return ()=>{alive=false;};
+    return () => { alive = false; };
   }, []);
 
-  const clearGroup = useCallback(()=>{
-    const g=groupRef.current; if(!g)return;
-    while(g.children.length){const o=g.children.pop();o?.traverse?.(c=>{if(c.isMesh){c.geometry?.dispose();c.material?.dispose();}});}
-  },[]);
+  const clearPreviewGroup = useCallback(() => {
+    const g = previewGroupRef.current;
+    if (!g) return;
+    while (g.children.length) {
+      const obj = g.children.pop();
+      obj?.traverse?.((c) => { if (c.isMesh) { c.geometry?.dispose(); c.material?.dispose(); } });
+    }
+  }, []);
 
-  // Build geometry
-  useEffect(()=>{
-    if(!fontsReady||!safeName||!groupRef.current)return;
-    const otFont=fontCacheRef.current[font]; if(!otFont)return;
-    setStatus("building"); clearGroup();
-    const tid=setTimeout(()=>{
-      try{
-        const svgPath=otFont.getPath(safeName,0,0,dTextSize).toPathData(2);
-        const svgData=new SVGLoader().parse(`<svg xmlns="http://www.w3.org/2000/svg"><path d="${svgPath}"/></svg>`);
-        const shapes=[]; svgData.paths.forEach(p=>p.toShapes(true).forEach(s=>shapes.push(s)));
-        if(!shapes.length)return;
-        const textGeo=new THREE.ExtrudeGeometry(shapes,{depth:dTextHeight,bevelEnabled:false,curveSegments:8});
-        textGeo.scale(1,-1,1); textGeo.computeBoundingBox();
-        const tb=textGeo.boundingBox; textGeo.translate(-(tb.max.x+tb.min.x)/2,-(tb.max.y+tb.min.y)/2,0);
-        const outerPaths=shapes.flatMap(sh=>shapeToOuterPaths(sh,48));
-        const baseGeo=new THREE.ExtrudeGeometry(polysToShapes(offsetUnion(outerPaths,dBorderOffset)),{depth:dBorderHeight,bevelEnabled:false,curveSegments:10});
-        baseGeo.scale(1,-1,1); baseGeo.computeBoundingBox();
-        const bb=baseGeo.boundingBox; baseGeo.translate(-(bb.max.x+bb.min.x)/2,-(bb.max.y+bb.min.y)/2,0);
-        baseGeo.computeBoundingBox(); const baseB=baseGeo.boundingBox;
-        const tabGeo=makeTabGeo(dTabD/2,dHoleD/2,dBorderHeight,40);
-        tabGeo.translate(baseB.min.x-dGap-dTabD/2,-dTabY,0);
-        clearGroup();
-        const baseMat=new THREE.MeshPhongMaterial({color:borderColor,shininess:80});
-        const textMat=new THREE.MeshPhongMaterial({color:textColor,shininess:100});
-        const baseMesh=new THREE.Mesh(baseGeo,baseMat);
-        const tabMesh=new THREE.Mesh(tabGeo,baseMat);
-        const textMesh=new THREE.Mesh(textGeo,textMat); textMesh.position.z=dBorderHeight;
-        groupRef.current.add(baseMesh,tabMesh,textMesh);
-        meshRef.current={base:baseMesh,tab:tabMesh,text:textMesh};
-        Object.values(exportGeoRef.current).forEach(g=>g?.dispose());
-        exportGeoRef.current={base:baseGeo.clone(),tab:tabGeo.clone(),text:textGeo.clone()};
-        const span=Math.max(baseB.max.x-baseB.min.x+dTabD+dGap+30,baseB.max.y-baseB.min.y+40);
-        if(cameraRef.current) cameraRef.current.position.set(0,0,span*1.2);
-        if(controlsRef.current){controlsRef.current.target.set(0,0,dBorderHeight/2);controlsRef.current.update();}
+  useEffect(() => {
+    if (!fontsReady || !safeName || !previewGroupRef.current) return;
+    const otFont = fontCacheRef.current[font];
+    if (!otFont) return;
+    setStatus("building");
+    clearPreviewGroup();
+    const tid = setTimeout(() => {
+      try {
+        const svgPath = otFont.getPath(safeName, 0, 0, dTextSize).toPathData(2);
+        const svgData = new SVGLoader().parse(`<svg xmlns="http://www.w3.org/2000/svg"><path d="${svgPath}"/></svg>`);
+        const shapes = [];
+        svgData.paths.forEach((p) => p.toShapes(true).forEach((s) => shapes.push(s)));
+        if (!shapes.length) return;
+
+        const textGeo = new THREE.ExtrudeGeometry(shapes, { depth: dTextHeight, bevelEnabled: false, curveSegments: 8 });
+        textGeo.scale(1, -1, 1);
+        textGeo.computeBoundingBox();
+        const tb = textGeo.boundingBox;
+        textGeo.translate(-(tb.max.x + tb.min.x) / 2, -(tb.max.y + tb.min.y) / 2, 0);
+
+        const outerPaths = shapes.flatMap((sh) => shapeToOuterPathsOnly(sh, 48));
+        const baseGeo = new THREE.ExtrudeGeometry(
+          polysToShapes(offsetUnion(outerPaths, dBorderOffset)),
+          { depth: dBorderHeight, bevelEnabled: false, curveSegments: 10 }
+        );
+        baseGeo.scale(1, -1, 1);
+        baseGeo.computeBoundingBox();
+        const bb = baseGeo.boundingBox;
+        baseGeo.translate(-(bb.max.x + bb.min.x) / 2, -(bb.max.y + bb.min.y) / 2, 0);
+        baseGeo.computeBoundingBox();
+        const baseB = baseGeo.boundingBox;
+
+        const tabGeo = makeRingTabGeometry(dTabDiameter / 2, dHoleDiameter / 2, dBorderHeight, 40);
+        tabGeo.translate(baseB.min.x - dGap - dTabDiameter / 2, -dTabYOffset, 0);
+
+        clearPreviewGroup();
+        const baseMat = new THREE.MeshPhongMaterial({ color: borderColor, shininess: 80 });
+        const textMat = new THREE.MeshPhongMaterial({ color: textColor, shininess: 100 });
+        const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+        const tabMesh = new THREE.Mesh(tabGeo, baseMat);
+        const textMesh = new THREE.Mesh(textGeo, textMat);
+        textMesh.position.z = dBorderHeight;
+        previewGroupRef.current.add(baseMesh, tabMesh, textMesh);
+        meshRefsRef.current = { base: baseMesh, tab: tabMesh, text: textMesh };
+
+        Object.values(exportGeomsRef.current).forEach((g) => g?.dispose());
+        exportGeomsRef.current = { base: baseGeo.clone(), tab: tabGeo.clone(), text: textGeo.clone() };
+
+        const span = Math.max(baseB.max.x - baseB.min.x + dTabDiameter + dGap + 30, baseB.max.y - baseB.min.y + 40);
+        if (cameraRef.current) cameraRef.current.position.set(0, 0, span * 1.2);
+        if (controlsRef.current) { controlsRef.current.target.set(0, 0, dBorderHeight / 2); controlsRef.current.update(); }
         setStatus("ready");
-      }catch(e){console.error(e);setStatus("error");}
-    },0);
-    return ()=>clearTimeout(tid);
-  },[fontsReady,safeName,font,dTextSize,dTextHeight,dBorderHeight,dBorderOffset,dGap,dTabD,dHoleD,dTabY,borderColor,textColor,clearGroup]);
+      } catch (e) { console.error(e); setStatus("error"); }
+    }, 0);
+    return () => clearTimeout(tid);
+  }, [fontsReady, safeName, font, dTextSize, dTextHeight, dBorderHeight, dBorderOffset, dGap, dTabDiameter, dHoleDiameter, dTabYOffset, borderColor, textColor, clearPreviewGroup]);
 
-  useEffect(()=>{
-    const {base,tab,text}=meshRef.current;
-    if(base) base.material.color.set(borderColor);
-    if(tab) tab.material.color.set(borderColor);
-    if(text) text.material.color.set(textColor);
-  },[borderColor,textColor]);
+  useEffect(() => {
+    const { base, tab, text } = meshRefsRef.current;
+    if (base) base.material.color.set(borderColor);
+    if (tab) tab.material.color.set(borderColor);
+    if (text) text.material.color.set(textColor);
+  }, [borderColor, textColor]);
 
-  // Export STL
-  const doExportSTL = useCallback((filename)=>{
-    const {base,tab,text}=exportGeoRef.current; if(!base||!tab||!text)return;
-    const t=text.clone(); t.translate(0,0,borderHeight);
-    const merged=mergeGeometries([cleanGeo(base),cleanGeo(tab),cleanGeo(t)],false); if(!merged)return;
-    const stl=new STLExporter().parse(new THREE.Mesh(merged,new THREE.MeshNormalMaterial()),{binary:false});
-    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([stl],{type:"model/stl"})); a.download=`${filename}.stl`; a.click(); URL.revokeObjectURL(a.href);
-    merged.dispose();
-  },[borderHeight]);
+  const exportSTL = useCallback(() => {
+    if (!safeName) return;
+    const { base, tab, text } = exportGeomsRef.current;
+    if (!base || !tab || !text) return;
+    const t = text.clone();
+    t.translate(0, 0, borderHeight);
+    const baseC = cleanForExport(base);
+    const tabC = cleanForExport(tab);
+    const textC = cleanForExport(t);
+    const merged = mergeGeometries([baseC, tabC, textC], false);
+    if (!merged) return;
+    const stl = new STLExporter().parse(new THREE.Mesh(merged, new THREE.MeshNormalMaterial()), { binary: false });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([stl], { type: "model/stl" }));
+    a.download = `${safeName}_${font.split(":")[0]}.stl`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    baseC.dispose(); tabC.dispose(); textC.dispose(); merged.dispose();
+  }, [safeName, font, borderHeight]);
 
-  // Export OBJ + MTL
-  const doExportOBJ = useCallback((filename)=>{
-    const {base,tab,text}=exportGeoRef.current; if(!base||!tab||!text)return;
-    const tText=text.clone(); tText.translate(0,0,borderHeight);
-    const baseC=cleanGeo(base),tabC=cleanGeo(tab),textC=cleanGeo(tText);
-    const baseMerged=mergeGeometries([baseC,tabC],false);
-    const mtlName=`${filename}.mtl`;
-    const hk=hex=>{const h=hex.replace(/^#/,"");return[parseInt(h.slice(0,2),16)/255,parseInt(h.slice(2,4),16)/255,parseInt(h.slice(4,6),16)/255];};
-    const[r1,g1,b1]=hk(borderColor),[r2,g2,b2]=hk(textColor);
-    const mtlStr=[`# Keychain Generator`,``,`newmtl BorderColor`,`Kd ${r1.toFixed(6)} ${g1.toFixed(6)} ${b1.toFixed(6)}`,`Ka ${r1.toFixed(6)} ${g1.toFixed(6)} ${b1.toFixed(6)}`,`Ks 0.05 0.05 0.05`,`Ns 10`,`d 1`,`illum 2`,``,`newmtl TextColor`,`Kd ${r2.toFixed(6)} ${g2.toFixed(6)} ${b2.toFixed(6)}`,`Ka ${r2.toFixed(6)} ${g2.toFixed(6)} ${b2.toFixed(6)}`,`Ks 0.05 0.05 0.05`,`Ns 10`,`d 1`,`illum 2`].join("\n");
-    function gLines(geo,mat,grp,off){const pos=geo.toNonIndexed().attributes.position,lines=[`g ${grp}`,`usemtl ${mat}`];for(let i=0;i<pos.count;i++)lines.push(`v ${pos.getX(i).toFixed(6)} ${pos.getY(i).toFixed(6)} ${pos.getZ(i).toFixed(6)}`);for(let i=0;i<pos.count;i+=3)lines.push(`f ${off+i+1} ${off+i+2} ${off+i+3}`);return{lines,count:pos.count};}
-    const{lines:l1,count:c1}=gLines(baseMerged,"BorderColor","border_tab",0);
-    const{lines:l2}=gLines(textC,"TextColor","text",c1);
-    const objStr=[`# Keychain Generator`,`mtllib ${mtlName}`,``].concat(l1,[""],l2).join("\n");
-    const aObj=document.createElement("a"); aObj.href=URL.createObjectURL(new Blob([objStr],{type:"model/obj"})); aObj.download=`${filename}.obj`; aObj.click(); URL.revokeObjectURL(aObj.href);
-    setTimeout(()=>{const aMtl=document.createElement("a");aMtl.href=URL.createObjectURL(new Blob([mtlStr],{type:"model/mtl"}));aMtl.download=mtlName;aMtl.click();URL.revokeObjectURL(aMtl.href);},200);
-    baseC.dispose();tabC.dispose();textC.dispose();baseMerged?.dispose();
-  },[borderHeight,borderColor,textColor]);
+  const exportOBJ = useCallback(() => {
+    if (!safeName) return;
+    const { base, tab, text } = exportGeomsRef.current;
+    if (!base || !tab || !text) return;
 
-  // FIX 5: Reset camera helper
-  const resetCamera = useCallback(()=>{
-    if(!cameraRef.current||!controlsRef.current)return;
-    cameraRef.current.position.set(0,0,140);
-    controlsRef.current.target.set(0,0,0);
-    controlsRef.current.update();
-  },[]);
+    const tText = text.clone();
+    tText.translate(0, 0, borderHeight);
+    const baseC = cleanForExport(base);
+    const tabC  = cleanForExport(tab);
+    const textC = cleanForExport(tText);
+    const baseMerged = mergeGeometries([baseC, tabC], false);
 
-  // Global styles — FIX 5: add pulse keyframe for building state
-  useEffect(()=>{
-    const id="kc-v3"; if(document.getElementById(id))return;
-    const s=document.createElement("style"); s.id=id;
-    s.textContent=`
+    const stem    = `${safeName}_${font.split(":")[0]}`;
+    const mtlName = `${stem}.mtl`;
+
+    // Parse hex colors to 0-1 RGB for MTL Kd values
+    function hexToKd(hex) {
+      const h = hex.replace(/^#/, "");
+      return [
+        parseInt(h.slice(0,2),16)/255,
+        parseInt(h.slice(2,4),16)/255,
+        parseInt(h.slice(4,6),16)/255,
+      ];
+    }
+    const [r1,g1,b1] = hexToKd(borderColor);
+    const [r2,g2,b2] = hexToKd(textColor);
+
+    // MTL file — two named materials with exact Kd values
+    const mtlStr = [
+      `# Keychain Generator — material colors`,
+      ``,
+      `newmtl BorderColor`,
+      `Kd ${r1.toFixed(6)} ${g1.toFixed(6)} ${b1.toFixed(6)}`,
+      `Ka ${r1.toFixed(6)} ${g1.toFixed(6)} ${b1.toFixed(6)}`,
+      `Ks 0.050000 0.050000 0.050000`,
+      `Ns 10.0`,
+      `d 1.0`,
+      `illum 2`,
+      ``,
+      `newmtl TextColor`,
+      `Kd ${r2.toFixed(6)} ${g2.toFixed(6)} ${b2.toFixed(6)}`,
+      `Ka ${r2.toFixed(6)} ${g2.toFixed(6)} ${b2.toFixed(6)}`,
+      `Ks 0.050000 0.050000 0.050000`,
+      `Ns 10.0`,
+      `d 1.0`,
+      `illum 2`,
+    ].join("\n");
+
+    // Build OBJ manually — guarantees correct usemtl grouping
+    function geoToObjLines(geo, matName, groupName, vOffset) {
+      const pos = geo.toNonIndexed().attributes.position;
+      const lines = [];
+      lines.push(`g ${groupName}`);
+      lines.push(`usemtl ${matName}`);
+      for (let i = 0; i < pos.count; i++)
+        lines.push(`v ${pos.getX(i).toFixed(6)} ${pos.getY(i).toFixed(6)} ${pos.getZ(i).toFixed(6)}`);
+      for (let i = 0; i < pos.count; i += 3)
+        lines.push(`f ${vOffset+i+1} ${vOffset+i+2} ${vOffset+i+3}`);
+      return { lines, count: pos.count };
+    }
+
+    const objLines = [`# Keychain Generator`, `mtllib ${mtlName}`, ``];
+    const { lines: l1, count: c1 } = geoToObjLines(baseMerged, "BorderColor", "border_tab", 0);
+    const { lines: l2 }            = geoToObjLines(textC,       "TextColor",   "text",       c1);
+    const objStr = objLines.concat(l1, [""], l2).join("\n");
+
+    // Download .obj then .mtl
+    const aObj = document.createElement("a");
+    aObj.href = URL.createObjectURL(new Blob([objStr], { type: "model/obj" }));
+    aObj.download = `${stem}.obj`;
+    aObj.click();
+    URL.revokeObjectURL(aObj.href);
+
+    setTimeout(() => {
+      const aMtl = document.createElement("a");
+      aMtl.href = URL.createObjectURL(new Blob([mtlStr], { type: "model/mtl" }));
+      aMtl.download = mtlName;
+      aMtl.click();
+      URL.revokeObjectURL(aMtl.href);
+    }, 200);
+
+    baseC.dispose(); tabC.dispose(); textC.dispose();
+    if (baseMerged) baseMerged.dispose();
+  }, [safeName, font, borderHeight, borderColor, textColor]);
+
+
+
+  useEffect(() => {
+    const id = "kc-global";
+    if (document.getElementById(id)) return;
+    const s = document.createElement("style");
+    s.id = id;
+    s.textContent = `
       @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=DM+Mono&display=swap');
       *{box-sizing:border-box;}
       input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;}
-      input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;border-radius:50%;background:white;border:2px solid #f472b6;box-shadow:0 1px 4px #f472b660;cursor:pointer;transition:transform 0.12s;}
-      input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25);}
-      input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:white;border:2px solid #f472b6;cursor:pointer;}
+      input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:white;border:2px solid #f472b6;box-shadow:0 1px 4px #f472b660;cursor:pointer;transition:transform 0.15s;}
+      input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
+      input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:white;border:2px solid #f472b6;cursor:pointer;}
       input[type=range]:focus{outline:none;}
       select{-webkit-appearance:none;appearance:none;}
-      ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:rgba(196,132,252,0.35);border-radius:3px;}
-      @keyframes kc-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+      ::-webkit-scrollbar{width:4px;}
+      ::-webkit-scrollbar-track{background:transparent;}
+      ::-webkit-scrollbar-thumb{background:#f0e6df;border-radius:4px;}
     `;
     document.head.appendChild(s);
-  },[]);
+  }, []);
 
-  const isBuilding = status === "building" || status === "loading";
-  const statusColor = status==="ready"?"#86efac":status==="error"?"#fca5a5":"#fcd34d";
-  // FIX 4: clearer status label
-  const statusLabel = status==="ready"?"Ready":status==="error"?"Error":status==="building"?"Rebuilding…":"Loading fonts…";
+  const statusColor = status === "ready" ? "#86efac" : status === "error" ? "#fca5a5" : "#fcd34d";
+  const statusLabel = status === "ready" ? "Ready" : status === "error" ? "Error" : status === "building" ? "Building…" : "Loading fonts…";
 
-  const inp = { width:"100%", padding:"9px 12px", background:C.inputBg, border:`1.5px solid ${C.inputBorder}`, borderRadius:12, color:C.text, fontFamily:"'Montserrat',sans-serif", fontSize:13, outline:"none", transition:"border-color 0.2s" };
+  const inputStyle = {
+    width: "100%", padding: "9px 12px", background: C.inputBg,
+    border: `1.5px solid ${C.border}`, borderRadius: 12, color: C.text,
+    fontFamily: "'Montserrat',sans-serif", fontSize: 14, outline: "none",
+    transition: "border-color 0.2s",
+  };
 
   return (
-    <div style={{ height:"100vh", overflow:"hidden", background:C.bg, fontFamily:"'Montserrat',sans-serif", color:C.text, transition:"background 0.3s,color 0.3s", display:"flex", flexDirection:"column" }}>
-
-      {/* Blobs */}
-      <div style={{ position:"fixed", inset:0, pointerEvents:"none", overflow:"hidden", zIndex:0 }}>
-        <div style={{ position:"absolute", top:-80, right:-80, width:340, height:340, borderRadius:"50%", background:C.blob1, filter:"blur(70px)", transition:"background 0.3s" }} />
-        <div style={{ position:"absolute", bottom:-60, left:-60, width:280, height:280, borderRadius:"50%", background:C.blob2, filter:"blur(60px)", transition:"background 0.3s" }} />
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh", fontFamily: "'Montserrat',sans-serif", background: C.bg, color: C.text, overflow: "hidden" }}>
+      <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
+        <div style={{ position: "absolute", top: -60, left: -60, width: 300, height: 300, borderRadius: "50%", background: C.blob1, filter: "blur(60px)" }} />
+        <div style={{ position: "absolute", bottom: -40, right: -40, width: 250, height: 250, borderRadius: "50%", background: C.blob2, filter: "blur(50px)" }} />
       </div>
 
-      <div style={{ position:"relative", zIndex:1, flex:1, display:"flex", flexDirection:"column", padding:"16px 20px", overflow:"hidden" }}>
-
-        {/* ── Header ── */}
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12, flexShrink:0 }}>
-          <div>
-            <h1 style={{ margin:0, fontSize:22, fontWeight:700, color:C.text, letterSpacing:"-0.02em", display:"flex", alignItems:"baseline", gap:10 }}>
-              Keychain Generator
-            </h1>
-            <p style={{ margin:"4px 0 0", fontSize:12, color:C.muted }}>Design, preview &amp; export in 3D</p>
-          </div>
+      <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px", borderBottom: `1px solid ${C.border}`, background: C.surface + "cc", backdropFilter: "blur(8px)" }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 15, color: C.text }}>⬡ Keychain Generator</div>
+          <div style={{ fontSize: 10, color: C.muted, letterSpacing: 0.5 }}>browser-only · Design, preview &amp; export</div>
         </div>
+        <button onClick={() => setDarkMode((d) => !d)} title={darkMode ? "Light mode" : "Dark mode"}
+          style={{ width: 40, height: 24, borderRadius: 20, border: "none", cursor: "pointer", background: darkMode ? `linear-gradient(90deg,${C.accent},${C.accent2})` : "#f0e6df", position: "relative", transition: "background 0.3s", padding: 0, flexShrink: 0 }}>
+          <div style={{ position: "absolute", top: 4, left: darkMode ? 20 : 4, width: 16, height: 16, borderRadius: "50%", background: "white", transition: "left 0.2s", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9 }}>
+            {darkMode ? "🌙" : "☀️"}
+          </div>
+        </button>
+      </div>
 
-        {/* ── Grid ── */}
-        <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", gap:16, flex:1, overflow:"hidden", alignItems:"stretch" }}>
+      <div style={{ display: "flex", flex: 1, overflow: "hidden", position: "relative", zIndex: 1 }}>
+        <div style={{ width: 260, flexShrink: 0, overflowY: "auto", padding: "14px 14px 20px", borderRight: `1px solid ${C.border}`, background: C.surface + "99", backdropFilter: "blur(6px)" }}>
 
-          {/* ── Controls Panel ── */}
-          <div style={{ background:C.surface, borderRadius:20, padding:"16px 18px", boxShadow:`0 4px 28px ${C.shadow}`, overflowY:"auto", display:"flex", flexDirection:"column", transition:"background 0.3s" }}>
+          <Section label="Text" C={C} />
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: C.muted, fontWeight: 500 }}>Name</span>
+              {name !== DEFAULTS.name && <ResetBtn onClick={() => setName(DEFAULTS.name)} title="Reset name" C={C} />}
+            </div>
+            <input value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="Your name…"
+              onFocus={(e) => (e.target.style.borderColor = C.accent)}
+              onBlur={(e) => (e.target.style.borderColor = C.border)}
+              style={{ ...inputStyle, marginBottom: 4 }} />
+            <div style={{ fontSize: 10, color: C.muted, textAlign: "right" }}>{name.length}/20</div>
+          </div>
 
-            <FieldLabel dirty={name!==DEFAULTS.name} onReset={()=>setName(DEFAULTS.name)} C={C}>Name</FieldLabel>
-            <input value={name} onChange={e=>setName(e.target.value)} maxLength={20} placeholder="Your name…"
-              onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.inputBorder}
-              style={{...inp, marginBottom:4}} />
-            <div style={{ fontSize:10, color:C.muted, textAlign:"right", marginBottom:14 }}>{name.length}/20</div>
-
-            <FieldLabel dirty={font!==DEFAULTS.font} onReset={()=>setFont(DEFAULTS.font)} C={C}>Font</FieldLabel>
-            <div style={{ position:"relative", marginBottom:4 }}>
-              <select value={font} onChange={e=>setFont(e.target.value)} style={{...inp, cursor:"pointer", paddingRight:32}}>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, color: C.muted, fontWeight: 500 }}>Font</span>
+              {font !== DEFAULTS.font && <ResetBtn onClick={() => setFont(DEFAULTS.font)} title="Reset font" C={C} />}
+            </div>
+            <div style={{ position: "relative" }}>
+              <select value={font} onChange={(e) => setFont(e.target.value)} style={{ ...inputStyle, cursor: "pointer", paddingRight: 32 }}>
                 <option value="Pacifico:style=Regular">Pacifico</option>
                 <option value="Lobster:style=Regular">Lobster</option>
                 <option value="Titan One:style=Regular">Titan One</option>
                 <option value="Luckiest Guy:style=Regular">Luckiest Guy</option>
-                <option value="Bhineka:style=Regular">Bhineka</option>
               </select>
-              <span style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:C.muted, fontSize:10, pointerEvents:"none" }}>▾</span>
-            </div>
-
-            <SectionHeader label="Colors" C={C} />
-            {/* Dark mode toggle in settings */}
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
-              <div>
-                <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>Theme</span>
-                <div style={{ fontSize:10, color:C.muted, marginTop:2 }}>follows system by default</div>
-              </div>
-              <button onClick={()=>setDarkMode(d=>!d)} title={darkMode?"Switch to light":"Switch to dark"}
-                style={{ width:42, height:24, borderRadius:20, border:`1.5px solid ${C.border}`, cursor:"pointer", background:darkMode?`linear-gradient(90deg,${C.accent},${C.accent2})`:"#f0e6df", position:"relative", transition:"background 0.3s", padding:0, flexShrink:0 }}>
-                <div style={{ position:"absolute", top:2, left:darkMode?18:2, width:18, height:18, borderRadius:"50%", background:"white", boxShadow:"0 1px 4px #0003", transition:"left 0.2s", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10 }}>
-                  {darkMode?"🌙":"☀️"}
-                </div>
-              </button>
-            </div>
-            {/* FIX 2: clearer labels with tooltips */}
-            <ColorRow label="Base & Tab" tooltip="shared color for border and keyring tab" value={borderColor} defaultValue={DEFAULTS.borderColor} onChange={setBorderColor} C={C} />
-            <ColorRow label="Text" value={textColor} defaultValue={DEFAULTS.textColor} onChange={setTextColor} C={C} />
-
-            <SectionHeader label="Text" C={C} />
-            <SliderRow label="Size" value={textSize} min={8} max={40} step={0.5} onChange={setTextSize} defaultValue={DEFAULTS.textSize} C={C} />
-            <SliderRow label="Height" value={textHeight} min={0.5} max={10} step={0.5} onChange={setTextHeight} defaultValue={DEFAULTS.textHeight} C={C} />
-
-            <SectionHeader label="Base" C={C} />
-            <SliderRow label="Height" value={borderHeight} min={0.5} max={10} step={0.5} onChange={setBorderHeight} defaultValue={DEFAULTS.borderHeight} C={C} />
-            {/* FIX 3: "Outline" → "Border Padding" */}
-            <SliderRow label="Border Padding" value={borderOffset} min={0.5} max={8} step={0.5} onChange={setBorderOffset} defaultValue={DEFAULTS.borderOffset} C={C} />
-
-            <SectionHeader label="Hole Tab" C={C} />
-            <SliderRow label="Gap" value={gap} min={-5} max={5} step={0.5} onChange={setGap} defaultValue={DEFAULTS.gap} C={C} />
-            <SliderRow label="Tab Diameter" value={tabDiameter} min={4} max={20} step={0.5} onChange={setTabDiameter} defaultValue={DEFAULTS.tabDiameter} C={C} />
-            <SliderRow label="Hole Diameter" value={holeDiameter} min={2} max={12} step={0.5} onChange={setHoleDiameter} defaultValue={DEFAULTS.holeDiameter} C={C} />
-            {/* FIX 6: Tab Y Offset range -10 to +10 */}
-            <SliderRow label="Tab Y Offset" value={tabYOffset} min={-10} max={10} step={0.5} onChange={setTabYOffset} defaultValue={DEFAULTS.tabYOffset} C={C} />
-
-            <button onClick={resetAll}
-              onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor=anyDirty?C.accent:C.border;e.currentTarget.style.color=anyDirty?C.accent:C.muted;}}
-              style={{ width:"100%", marginTop:20, marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"9px 0", borderRadius:12, background:anyDirty?C.pill:"none", border:`1.5px solid ${anyDirty?C.accent:C.border}`, color:anyDirty?C.accent:C.muted, fontSize:11, fontWeight:600, fontFamily:"inherit", cursor:"pointer", transition:"all 0.2s" }}>
-              ↺ Reset all settings
-            </button>
-
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-              {[
-                { label:"STL", format:"STL", grad:`linear-gradient(135deg,#fda4af,#f472b6)`, note:"geometry only" },
-                { label:"OBJ", format:"OBJ", grad:`linear-gradient(135deg,#c4b5fd,#a78bfa)`, note:"with colors" },
-              ].map(({label,format,grad,note})=>(
-                <button key={label} onClick={()=>fontsReady&&!exporting&&setExportModal(format)}
-                  disabled={!fontsReady||exporting}
-                  onMouseEnter={e=>fontsReady&&!exporting&&(e.currentTarget.style.transform="translateY(-1px)")}
-                  onMouseLeave={e=>(e.currentTarget.style.transform="none")}
-                  style={{ padding:"11px 0 9px", fontSize:11, fontWeight:700, fontFamily:"inherit", letterSpacing:"0.06em", textTransform:"uppercase", background:fontsReady&&!exporting?grad:C.border, color:fontsReady&&!exporting?"white":C.muted, border:"none", borderRadius:14, cursor:fontsReady&&!exporting?"pointer":"not-allowed", boxShadow:fontsReady&&!exporting?`0 4px 14px ${C.shadow}`:"none", transition:"all 0.2s" }}>
-                  Export {label}
-                  <div style={{ fontSize:9, fontWeight:400, opacity:0.8, marginTop:2 }}>{note}</div>
-                </button>
-              ))}
-            </div>
-
-            {/* FIX 4: Status badge pulses while building */}
-            <div style={{ marginTop:14, display:"flex", justifyContent:"center" }}>
-              <div style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 14px", borderRadius:20, background:`${statusColor}18`, border:`1px solid ${statusColor}55`, animation:isBuilding?"kc-pulse 1.2s ease-in-out infinite":undefined }}>
-                <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor, boxShadow:`0 0 5px ${statusColor}` }} />
-                <span style={{ fontSize:10, fontWeight:600, color:statusColor, letterSpacing:"0.08em", textTransform:"uppercase" }}>
-                  {exporting?"Exporting…":statusLabel}
-                </span>
-              </div>
+              <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: C.muted, fontSize: 10 }}>▾</span>
             </div>
           </div>
 
-          {/* ── Viewport Panel ── */}
-          <div style={{ background:C.surface, borderRadius:20, overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:`0 4px 28px ${C.shadow2}`, transition:"background 0.3s" }}>
-            <div style={{ padding:"12px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.08em" }}>3D Preview</span>
-              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <span style={{ fontSize:10, color:C.muted }}>drag to rotate · scroll to zoom</span>
-                {/* FIX 5: Reset camera button */}
-                <button onClick={resetCamera} title="Reset camera view"
-                  style={{ fontSize:10, fontWeight:600, color:C.muted, background:"none", border:`1px solid ${C.border}`, borderRadius:8, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" }}
-                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
-                  onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.muted;}}>
-                  ⟳ Reset view
-                </button>
-              </div>
-            </div>
-            <div ref={canvasRef} style={{ flex:1 }} />
+          <SliderRow label="Text Size" value={textSize} min={8} max={40} step={0.5} onChange={setTextSize} defaultValue={DEFAULTS.textSize} C={C} />
+          <SliderRow label="Text Height" value={textHeight} min={0.5} max={8} step={0.5} onChange={setTextHeight} defaultValue={DEFAULTS.textHeight} C={C} />
+
+          <Section label="Border" C={C} />
+          <SliderRow label="Border Height" value={borderHeight} min={0.5} max={8} step={0.5} onChange={setBorderHeight} defaultValue={DEFAULTS.borderHeight} C={C} />
+          <SliderRow label="Border Offset" value={borderOffset} min={1} max={15} step={0.5} onChange={setBorderOffset} defaultValue={DEFAULTS.borderOffset} C={C} />
+
+          <Section label="Tab" C={C} />
+          <SliderRow label="Gap" value={gap} min={-5} max={5} step={0.5} onChange={setGap} defaultValue={DEFAULTS.gap} C={C} />
+          <SliderRow label="Tab Diameter" value={tabDiameter} min={4} max={20} step={0.5} onChange={setTabDiameter} defaultValue={DEFAULTS.tabDiameter} C={C} />
+          <SliderRow label="Hole Diameter" value={holeDiameter} min={1} max={10} step={0.5} onChange={setHoleDiameter} defaultValue={DEFAULTS.holeDiameter} C={C} />
+          <SliderRow label="Tab Y Offset" value={tabYOffset} min={-20} max={20} step={0.5} onChange={setTabYOffset} defaultValue={DEFAULTS.tabYOffset} C={C} />
+
+          <Section label="Colors" C={C} />
+          <ColorPicker label="Border / Tab" value={borderColor} defaultValue={DEFAULTS.borderColor} onChange={setBorderColor} C={C} />
+          <ColorPicker label="Text" value={textColor} defaultValue={DEFAULTS.textColor} onChange={setTextColor} C={C} />
+
+          <button onClick={resetAll} disabled={!anyDirty}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.color = C.accent; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = anyDirty ? C.accent : C.border; e.currentTarget.style.color = anyDirty ? C.accent : C.muted; }}
+            style={{ width: "100%", padding: "7px 0", marginTop: 4, background: "none", border: `1.5px solid ${anyDirty ? C.accent : C.border}`, borderRadius: 10, cursor: anyDirty ? "pointer" : "default", fontSize: 12, color: anyDirty ? C.accent : C.muted, fontFamily: "'Montserrat',sans-serif", fontWeight: 600, transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            ↺ Reset all settings
+          </button>
+
+          <Section label="Export" C={C} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {[
+              { label: "STL", fn: exportSTL, grad: "linear-gradient(135deg,#fda4af,#f472b6)", note: "geometry only" },
+              { label: "OBJ", fn: exportOBJ, grad: "linear-gradient(135deg,#6ee7b7,#34d399)", note: "with .mtl colors" },
+            ].map(({ label, fn, grad, note }) => (
+              <button key={label} onClick={fn} disabled={!fontsReady}
+                onMouseEnter={(e) => fontsReady && (e.currentTarget.style.transform = "translateY(-1px)")}
+                onMouseLeave={(e) => (e.currentTarget.style.transform = "none")}
+                style={{ padding: "10px 0", borderRadius: 12, border: "none", background: fontsReady ? grad : C.border, color: "white", fontFamily: "'Montserrat',sans-serif", fontWeight: 700, fontSize: 13, cursor: fontsReady ? "pointer" : "not-allowed", transition: "transform 0.15s,opacity 0.2s", opacity: fontsReady ? 1 : 0.5, boxShadow: `0 3px 14px ${C.shadow}` }}>
+                Export {label}
+                <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.85, marginTop: 1 }}>{note}</div>
+              </button>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: statusColor, boxShadow: `0 0 6px ${statusColor}` }} />
+            <span style={{ fontSize: 11, color: C.muted }}>{statusLabel}</span>
+          </div>
+        </div>
+
+        <div ref={canvasRef} style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)", fontSize: 10, color: C.muted, background: C.surface + "99", backdropFilter: "blur(4px)", padding: "3px 10px", borderRadius: 20, pointerEvents: "none", whiteSpace: "nowrap", zIndex: 2 }}>
+            3D Preview · drag to rotate · scroll to zoom
           </div>
         </div>
       </div>
-
-      {exportModal && (
-        <ExportModal
-          defaultName={suggestedName}
-          format={exportModal}
-          C={C}
-          onCancel={()=>setExportModal(null)}
-          onConfirm={filename=>{
-            if(exportModal==="STL") doExportSTL(filename);
-            else doExportOBJ(filename);
-            setExportModal(null);
-          }}
-        />
-      )}
     </div>
   );
 }
