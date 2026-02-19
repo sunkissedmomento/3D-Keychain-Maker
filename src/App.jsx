@@ -19,6 +19,7 @@ const FONT_URLS = {
   "Lobster:style=Regular": "/fonts/Lobster-Regular.ttf",
   "Titan One:style=Regular": "/fonts/TitanOne-Regular.ttf",
   "Luckiest Guy:style=Regular": "/fonts/LuckiestGuy-Regular.ttf",
+  "Bhineka:style=Regular": "/fonts/Bhineka-Regular.ttf",
 };
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
@@ -42,7 +43,7 @@ const LIGHT = {
   muted: "#b89ec4", accent: "#f472b6", accent2: "#c084fc",
   trackBg: "#f5e6f0", pill: "#fce7f3", pillText: "#e879a0",
   inputBg: "#fff8fc", inputBorder: "#edd5f0",
-  sceneBg: 0xfdf0f8, shadow: "#f9a8d428", shadow2: "#c084fc18",
+  sceneBg: 0xe8d5f0, shadow: "#f9a8d428", shadow2: "#c084fc18",
   blob1: "#fce7f338", blob2: "#e9d5ff38",
 };
 const DARK = {
@@ -50,7 +51,7 @@ const DARK = {
   muted: "#7a5a9a", accent: "#f472b6", accent2: "#c084fc",
   trackBg: "#2e1d3a", pill: "#3a1f52", pillText: "#e879f9",
   inputBg: "#1a1028", inputBorder: "#3a2050",
-  sceneBg: 0x0e0816, shadow: "#f9a8d418", shadow2: "#c084fc14",
+  sceneBg: 0x1a0f2e, shadow: "#f9a8d418", shadow2: "#c084fc14",
   blob1: "#f472b612", blob2: "#c084fc12",
 };
 
@@ -149,7 +150,6 @@ function SliderRow({ label, value, min, max, step=1, unit="mm", onChange, defaul
   );
 }
 
-
 function SectionHeader({ label, C }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:8, margin:"20px 0 12px" }}>
@@ -160,17 +160,22 @@ function SectionHeader({ label, C }) {
   );
 }
 
-function ColorRow({ label, value, defaultValue, onChange, C }) {
+// FIX 1: Bigger swatch (44x44), clearer label with tooltip
+function ColorRow({ label, value, defaultValue, onChange, C, tooltip }) {
   const dirty = value !== defaultValue;
   return (
-    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-      <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</span>
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+      <div>
+        <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</span>
+        {tooltip && <div style={{ fontSize:10, color:C.muted, marginTop:2, fontWeight:400, textTransform:"none", letterSpacing:0 }}>{tooltip}</div>}
+      </div>
       <div style={{ display:"flex", alignItems:"center", gap:7 }}>
         {dirty && <ResetBtn onClick={()=>onChange(defaultValue)} C={C} />}
         <span style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:dirty?C.text:C.muted }}>{value.toUpperCase()}</span>
-        <div style={{ width:30, height:30, borderRadius:9, background:value, border:`2.5px solid ${dirty?value:C.border}`, boxShadow:`0 2px 8px ${value}60`, overflow:"hidden", cursor:"pointer", position:"relative", flexShrink:0, transition:"box-shadow 0.2s" }}>
+        {/* FIX 1: swatch 44x44 for easier clicking */}
+        <div style={{ width:44, height:44, borderRadius:11, background:value, border:`2.5px solid ${dirty?value:C.border}`, boxShadow:`0 2px 10px ${value}70`, overflow:"hidden", cursor:"pointer", position:"relative", flexShrink:0, transition:"box-shadow 0.2s" }}>
           <input type="color" value={value} onChange={e=>onChange(e.target.value)}
-            style={{ position:"absolute", inset:"-4px", width:"calc(100% + 8px)", height:"calc(100% + 8px)", opacity:0, cursor:"pointer" }} />
+            style={{ position:"absolute", inset:"-6px", width:"calc(100% + 12px)", height:"calc(100% + 12px)", opacity:0, cursor:"pointer" }} />
         </div>
       </div>
     </div>
@@ -213,7 +218,13 @@ function ExportModal({ defaultName, format, onConfirm, onCancel, C }) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = e => setDarkMode(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
   const C = darkMode ? DARK : LIGHT;
 
   const [name, setName] = useState(DEFAULTS.name);
@@ -232,9 +243,8 @@ export default function App() {
   const [fontsReady, setFontsReady] = useState(false);
   const [status, setStatus] = useState("loading");
   const [exporting, setExporting] = useState(false);
-  const [exportModal, setExportModal] = useState(null); // null | "STL" | "OBJ"
+  const [exportModal, setExportModal] = useState(null);
 
-  // Persist colors
   useEffect(() => { readSavedColors().then(s => { if(s?.borderColor) setBorderColor(s.borderColor); if(s?.textColor) setTextColor(s.textColor); setColorsLoaded(true); }); }, []);
   useEffect(() => { if(colorsLoaded) persistColors(borderColor, textColor); }, [borderColor, textColor, colorsLoaded]);
 
@@ -394,7 +404,15 @@ export default function App() {
     baseC.dispose();tabC.dispose();textC.dispose();baseMerged?.dispose();
   },[borderHeight,borderColor,textColor]);
 
-  // Global styles
+  // FIX 5: Reset camera helper
+  const resetCamera = useCallback(()=>{
+    if(!cameraRef.current||!controlsRef.current)return;
+    cameraRef.current.position.set(0,0,140);
+    controlsRef.current.target.set(0,0,0);
+    controlsRef.current.update();
+  },[]);
+
+  // Global styles — FIX 5: add pulse keyframe for building state
   useEffect(()=>{
     const id="kc-v3"; if(document.getElementById(id))return;
     const s=document.createElement("style"); s.id=id;
@@ -408,17 +426,20 @@ export default function App() {
       input[type=range]:focus{outline:none;}
       select{-webkit-appearance:none;appearance:none;}
       ::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-track{background:transparent;}::-webkit-scrollbar-thumb{background:rgba(196,132,252,0.35);border-radius:3px;}
+      @keyframes kc-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
     `;
     document.head.appendChild(s);
   },[]);
 
+  const isBuilding = status === "building" || status === "loading";
   const statusColor = status==="ready"?"#86efac":status==="error"?"#fca5a5":"#fcd34d";
-  const statusLabel = status==="ready"?"Ready":status==="error"?"Error":status==="building"?"Building…":"Loading fonts…";
+  // FIX 4: clearer status label
+  const statusLabel = status==="ready"?"Ready":status==="error"?"Error":status==="building"?"Rebuilding…":"Loading fonts…";
 
   const inp = { width:"100%", padding:"9px 12px", background:C.inputBg, border:`1.5px solid ${C.inputBorder}`, borderRadius:12, color:C.text, fontFamily:"'Montserrat',sans-serif", fontSize:13, outline:"none", transition:"border-color 0.2s" };
 
   return (
-    <div style={{ minHeight:"100vh", background:C.bg, fontFamily:"'Montserrat',sans-serif", color:C.text, transition:"background 0.3s,color 0.3s" }}>
+    <div style={{ height:"100vh", overflow:"hidden", background:C.bg, fontFamily:"'Montserrat',sans-serif", color:C.text, transition:"background 0.3s,color 0.3s", display:"flex", flexDirection:"column" }}>
 
       {/* Blobs */}
       <div style={{ position:"fixed", inset:0, pointerEvents:"none", overflow:"hidden", zIndex:0 }}>
@@ -426,40 +447,30 @@ export default function App() {
         <div style={{ position:"absolute", bottom:-60, left:-60, width:280, height:280, borderRadius:"50%", background:C.blob2, filter:"blur(60px)", transition:"background 0.3s" }} />
       </div>
 
-      <div style={{ position:"relative", zIndex:1, maxWidth:1140, margin:"0 auto", padding:"28px 20px" }}>
+      <div style={{ position:"relative", zIndex:1, flex:1, display:"flex", flexDirection:"column", padding:"16px 20px", overflow:"hidden" }}>
 
         {/* ── Header ── */}
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:24 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12, flexShrink:0 }}>
           <div>
             <h1 style={{ margin:0, fontSize:22, fontWeight:700, color:C.text, letterSpacing:"-0.02em", display:"flex", alignItems:"baseline", gap:10 }}>
               Keychain Generator
-              <span style={{ fontSize:11, fontWeight:500, color:C.muted, letterSpacing:"0.04em" }}>browser-only</span>
             </h1>
             <p style={{ margin:"4px 0 0", fontSize:12, color:C.muted }}>Design, preview &amp; export in 3D</p>
           </div>
-          {/* Dark toggle */}
-          <button onClick={()=>setDarkMode(d=>!d)} title={darkMode?"Light mode":"Dark mode"}
-            style={{ width:42, height:24, borderRadius:20, border:"none", cursor:"pointer", background:darkMode?`linear-gradient(90deg,${C.accent},${C.accent2})`:"#f0e6df", position:"relative", transition:"background 0.3s", padding:0, flexShrink:0 }}>
-            <div style={{ position:"absolute", top:3, left:darkMode?20:3, width:18, height:18, borderRadius:"50%", background:"white", boxShadow:"0 1px 4px #0003", transition:"left 0.2s", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10 }}>
-              {darkMode?"🌙":"☀️"}
-            </div>
-          </button>
         </div>
 
         {/* ── Grid ── */}
-        <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", gap:16, alignItems:"start" }}>
+        <div style={{ display:"grid", gridTemplateColumns:"300px 1fr", gap:16, flex:1, overflow:"hidden", alignItems:"stretch" }}>
 
           {/* ── Controls Panel ── */}
-          <div style={{ background:C.surface, borderRadius:20, border:`1.5px solid ${C.border}`, padding:"20px 18px", boxShadow:`0 4px 28px ${C.shadow}`, overflowY:"auto", maxHeight:"calc(100vh - 120px)", transition:"background 0.3s,border-color 0.3s" }}>
+          <div style={{ background:C.surface, borderRadius:20, padding:"16px 18px", boxShadow:`0 4px 28px ${C.shadow}`, overflowY:"auto", display:"flex", flexDirection:"column", transition:"background 0.3s" }}>
 
-            {/* Name */}
             <FieldLabel dirty={name!==DEFAULTS.name} onReset={()=>setName(DEFAULTS.name)} C={C}>Name</FieldLabel>
             <input value={name} onChange={e=>setName(e.target.value)} maxLength={20} placeholder="Your name…"
               onFocus={e=>e.target.style.borderColor=C.accent} onBlur={e=>e.target.style.borderColor=C.inputBorder}
               style={{...inp, marginBottom:4}} />
             <div style={{ fontSize:10, color:C.muted, textAlign:"right", marginBottom:14 }}>{name.length}/20</div>
 
-            {/* Font */}
             <FieldLabel dirty={font!==DEFAULTS.font} onReset={()=>setFont(DEFAULTS.font)} C={C}>Font</FieldLabel>
             <div style={{ position:"relative", marginBottom:4 }}>
               <select value={font} onChange={e=>setFont(e.target.value)} style={{...inp, cursor:"pointer", paddingRight:32}}>
@@ -467,12 +478,27 @@ export default function App() {
                 <option value="Lobster:style=Regular">Lobster</option>
                 <option value="Titan One:style=Regular">Titan One</option>
                 <option value="Luckiest Guy:style=Regular">Luckiest Guy</option>
+                <option value="Bhineka:style=Regular">Bhineka</option>
               </select>
               <span style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", color:C.muted, fontSize:10, pointerEvents:"none" }}>▾</span>
             </div>
 
             <SectionHeader label="Colors" C={C} />
-            <ColorRow label="Border + Tab" value={borderColor} defaultValue={DEFAULTS.borderColor} onChange={setBorderColor} C={C} />
+            {/* Dark mode toggle in settings */}
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+              <div>
+                <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>Theme</span>
+                <div style={{ fontSize:10, color:C.muted, marginTop:2 }}>follows system by default</div>
+              </div>
+              <button onClick={()=>setDarkMode(d=>!d)} title={darkMode?"Switch to light":"Switch to dark"}
+                style={{ width:42, height:24, borderRadius:20, border:`1.5px solid ${C.border}`, cursor:"pointer", background:darkMode?`linear-gradient(90deg,${C.accent},${C.accent2})`:"#f0e6df", position:"relative", transition:"background 0.3s", padding:0, flexShrink:0 }}>
+                <div style={{ position:"absolute", top:2, left:darkMode?18:2, width:18, height:18, borderRadius:"50%", background:"white", boxShadow:"0 1px 4px #0003", transition:"left 0.2s", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10 }}>
+                  {darkMode?"🌙":"☀️"}
+                </div>
+              </button>
+            </div>
+            {/* FIX 2: clearer labels with tooltips */}
+            <ColorRow label="Base & Tab" tooltip="shared color for border and keyring tab" value={borderColor} defaultValue={DEFAULTS.borderColor} onChange={setBorderColor} C={C} />
             <ColorRow label="Text" value={textColor} defaultValue={DEFAULTS.textColor} onChange={setTextColor} C={C} />
 
             <SectionHeader label="Text" C={C} />
@@ -481,15 +507,16 @@ export default function App() {
 
             <SectionHeader label="Base" C={C} />
             <SliderRow label="Height" value={borderHeight} min={0.5} max={10} step={0.5} onChange={setBorderHeight} defaultValue={DEFAULTS.borderHeight} C={C} />
-            <SliderRow label="Outline" value={borderOffset} min={0.5} max={8} step={0.5} onChange={setBorderOffset} defaultValue={DEFAULTS.borderOffset} C={C} />
+            {/* FIX 3: "Outline" → "Border Padding" */}
+            <SliderRow label="Border Padding" value={borderOffset} min={0.5} max={8} step={0.5} onChange={setBorderOffset} defaultValue={DEFAULTS.borderOffset} C={C} />
 
             <SectionHeader label="Hole Tab" C={C} />
             <SliderRow label="Gap" value={gap} min={-5} max={5} step={0.5} onChange={setGap} defaultValue={DEFAULTS.gap} C={C} />
             <SliderRow label="Tab Diameter" value={tabDiameter} min={4} max={20} step={0.5} onChange={setTabDiameter} defaultValue={DEFAULTS.tabDiameter} C={C} />
             <SliderRow label="Hole Diameter" value={holeDiameter} min={2} max={12} step={0.5} onChange={setHoleDiameter} defaultValue={DEFAULTS.holeDiameter} C={C} />
-            <SliderRow label="Tab Y Offset" value={tabYOffset} min={-30} max={30} step={0.5} onChange={setTabYOffset} defaultValue={DEFAULTS.tabYOffset} C={C} />
+            {/* FIX 6: Tab Y Offset range -10 to +10 */}
+            <SliderRow label="Tab Y Offset" value={tabYOffset} min={-10} max={10} step={0.5} onChange={setTabYOffset} defaultValue={DEFAULTS.tabYOffset} C={C} />
 
-            {/* Reset All */}
             <button onClick={resetAll}
               onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=anyDirty?C.accent:C.border;e.currentTarget.style.color=anyDirty?C.accent:C.muted;}}
@@ -497,7 +524,6 @@ export default function App() {
               ↺ Reset all settings
             </button>
 
-            {/* Export Buttons */}
             <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
               {[
                 { label:"STL", format:"STL", grad:`linear-gradient(135deg,#fda4af,#f472b6)`, note:"geometry only" },
@@ -514,9 +540,9 @@ export default function App() {
               ))}
             </div>
 
-            {/* Status */}
+            {/* FIX 4: Status badge pulses while building */}
             <div style={{ marginTop:14, display:"flex", justifyContent:"center" }}>
-              <div style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 14px", borderRadius:20, background:`${statusColor}18`, border:`1px solid ${statusColor}55` }}>
+              <div style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 14px", borderRadius:20, background:`${statusColor}18`, border:`1px solid ${statusColor}55`, animation:isBuilding?"kc-pulse 1.2s ease-in-out infinite":undefined }}>
                 <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor, boxShadow:`0 0 5px ${statusColor}` }} />
                 <span style={{ fontSize:10, fontWeight:600, color:statusColor, letterSpacing:"0.08em", textTransform:"uppercase" }}>
                   {exporting?"Exporting…":statusLabel}
@@ -526,17 +552,25 @@ export default function App() {
           </div>
 
           {/* ── Viewport Panel ── */}
-          <div style={{ background:C.surface, borderRadius:20, border:`1.5px solid ${C.border}`, overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:`0 4px 28px ${C.shadow2}`, transition:"background 0.3s,border-color 0.3s" }}>
-            <div style={{ padding:"12px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", transition:"border-color 0.3s" }}>
+          <div style={{ background:C.surface, borderRadius:20, overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:`0 4px 28px ${C.shadow2}`, transition:"background 0.3s" }}>
+            <div style={{ padding:"12px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.08em" }}>3D Preview</span>
-              <span style={{ fontSize:10, color:C.muted }}>drag to rotate · scroll to zoom</span>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <span style={{ fontSize:10, color:C.muted }}>drag to rotate · scroll to zoom</span>
+                {/* FIX 5: Reset camera button */}
+                <button onClick={resetCamera} title="Reset camera view"
+                  style={{ fontSize:10, fontWeight:600, color:C.muted, background:"none", border:`1px solid ${C.border}`, borderRadius:8, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" }}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.muted;}}>
+                  ⟳ Reset view
+                </button>
+              </div>
             </div>
-            <div ref={canvasRef} style={{ flex:1, minHeight:540 }} />
+            <div ref={canvasRef} style={{ flex:1 }} />
           </div>
         </div>
       </div>
 
-      {/* ── Export Modal ── */}
       {exportModal && (
         <ExportModal
           defaultName={suggestedName}
