@@ -8,7 +8,7 @@ import ClipperLib from "clipper-lib";
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 const DEFAULTS = {
-  name: "Makerlab", font: "Bhineka:style=Regular",
+  name: "Name", font: "Bhineka:style=Regular",
   textSize: 15, textHeight: 3.0, borderHeight: 2.0, borderOffset: 3.0,
   gap: 0, tabDiameter: 8.0, holeDiameter: 4.0, tabYOffset: 0.0,
   borderColor: "#f9a8d4", textColor: "#c084fc",
