@@ -9,7 +9,7 @@ import ClipperLib from "clipper-lib";
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 const DEFAULTS = {
   name: "Name", font: "Bhineka:style=Regular",
-  textSize: 15, textHeight: 3.0, borderHeight: 2.0, borderOffset: 3.0,
+  textCapHeight: 20, textHeight: 3.0, borderHeight: 2.0, borderOffset: 3.0,
   gap: 0, tabDiameter: 8.0, holeDiameter: 4.0, tabYOffset: 0.0,
   borderColor: "#f9a8d4", textColor: "#c084fc",
 };
@@ -122,21 +122,50 @@ function FieldLabel({ children, dirty, onReset, C }) {
 }
 
 function SliderRow({ label, value, min, max, step=1, unit="mm", onChange, defaultValue, C }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef(null);
   const dirty = value !== defaultValue;
   const bipolar = min < 0 && max > 0;
   const zeroPct = (-min / (max - min)) * 100;
   const valPct = ((value - min) / (max - min)) * 100;
   const fillLeft = bipolar ? Math.min(zeroPct, valPct) : 0;
   const fillWidth = bipolar ? Math.abs(valPct - zeroPct) : valPct;
+
+  function startEdit() {
+    setDraft(String(value));
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  }
+  function commitEdit() {
+    const parsed = parseFloat(draft);
+    if (!isNaN(parsed)) {
+      const snapped = Math.round(parsed / step) * step;
+      onChange(Math.min(max, Math.max(min, parseFloat(snapped.toFixed(10)))));
+    }
+    setEditing(false);
+  }
+  function onKeyDown(e) {
+    if (e.key === "Enter")  { e.preventDefault(); commitEdit(); }
+    if (e.key === "Escape") { setEditing(false); }
+  }
+
   return (
     <div style={{ marginBottom:16 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:7 }}>
         <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.06em" }}>{label}</span>
         <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-          <span style={{ fontSize:12, fontFamily:"'DM Mono',monospace", color:dirty?C.pillText:C.muted, background:dirty?C.pill:"transparent", padding:dirty?"2px 8px":"0", borderRadius:20, transition:"all 0.15s" }}>
-            {bipolar && value > 0 ? `+${value}` : value}{unit}
-          </span>
-          {dirty && <ResetBtn onClick={()=>onChange(defaultValue)} C={C} />}
+          {editing ? (
+            <input ref={inputRef} value={draft} onChange={e=>setDraft(e.target.value)}
+              onBlur={commitEdit} onKeyDown={onKeyDown}
+              style={{ width:62, fontSize:12, fontFamily:"'DM Mono',monospace", color:C.pillText, background:C.pill, border:"none", borderRadius:20, padding:"2px 8px", outline:"none", textAlign:"right" }} />
+          ) : (
+            <span onClick={startEdit} title="Click to type a value"
+              style={{ fontSize:12, fontFamily:"'DM Mono',monospace", color:dirty?C.pillText:C.muted, background:dirty?C.pill:"transparent", padding:dirty?"2px 8px":"2px 4px", borderRadius:20, transition:"all 0.15s", cursor:"text", userSelect:"none" }}>
+              {bipolar && value > 0 ? `+${value}` : value}{unit}
+            </span>
+          )}
+          {dirty && !editing && <ResetBtn onClick={()=>onChange(defaultValue)} C={C} />}
         </div>
       </div>
       <div style={{ position:"relative", height:5, borderRadius:5, background:C.trackBg }}>
@@ -173,7 +202,7 @@ function ColorRow({ label, value, defaultValue, onChange, C, tooltip }) {
         {dirty && <ResetBtn onClick={()=>onChange(defaultValue)} C={C} />}
         <span style={{ fontSize:10, fontFamily:"'DM Mono',monospace", color:dirty?C.text:C.muted }}>{value.toUpperCase()}</span>
         {/* FIX 1: swatch 44x44 for easier clicking */}
-        <div style={{ width:44, height:44, borderRadius:11, background:value, border:`2.5px solid ${dirty?value:C.border}`, boxShadow:`0 2px 10px ${value}70`, overflow:"hidden", cursor:"pointer", position:"relative", flexShrink:0, transition:"box-shadow 0.2s" }}>
+        <div style={{ width:44, height:44, borderRadius:11, background:value, border:`2.5px solid ${dirty?value:"transparent"}`, boxShadow:`0 2px 10px ${value}70`, overflow:"hidden", cursor:"pointer", position:"relative", flexShrink:0, transition:"box-shadow 0.2s" }}>
           <input type="color" value={value} onChange={e=>onChange(e.target.value)}
             style={{ position:"absolute", inset:"-6px", width:"calc(100% + 12px)", height:"calc(100% + 12px)", opacity:0, cursor:"pointer" }} />
         </div>
@@ -190,7 +219,7 @@ function ExportModal({ defaultName, format, onConfirm, onCancel, C }) {
 
   return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", backdropFilter:"blur(6px)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
-      <div style={{ background:C.surface, border:`1.5px solid ${C.border}`, borderRadius:20, padding:"28px 26px 22px", width:340, boxShadow:`0 24px 64px rgba(0,0,0,0.3)` }}>
+      <div style={{ background:C.surface, borderRadius:20, padding:"28px 26px 22px", width:340, boxShadow:`0 24px 64px rgba(0,0,0,0.3)` }}>
         <div style={{ fontSize:16, fontWeight:700, color:C.text, marginBottom:6 }}>Name your {format} export</div>
         <div style={{ fontSize:12, color:C.muted, marginBottom:18, lineHeight:1.5 }}>
           {format === "OBJ"
@@ -200,10 +229,10 @@ function ExportModal({ defaultName, format, onConfirm, onCancel, C }) {
         <input ref={ref} value={val} onChange={e=>setVal(e.target.value.replace(/[^a-zA-Z0-9 _-]/g,""))}
           onKeyDown={e=>{ if(e.key==="Enter"&&val.trim()) onConfirm(val.trim()); if(e.key==="Escape") onCancel(); }}
           maxLength={48}
-          style={{ width:"100%", padding:"10px 13px", background:C.inputBg, border:`1.5px solid ${C.accent2}`, borderRadius:11, color:C.text, fontSize:14, fontFamily:"inherit", outline:"none", marginBottom:18 }} />
+          style={{ width:"100%", padding:"10px 13px", background:C.inputBg, border:"none", borderRadius:11, color:C.text, fontSize:14, fontFamily:"inherit", outline:"none", marginBottom:18 }} />
         <div style={{ display:"flex", gap:10 }}>
           <button onClick={onCancel}
-            style={{ flex:1, padding:"10px 0", borderRadius:11, border:`1.5px solid ${C.border}`, background:"none", color:C.muted, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
+            style={{ flex:1, padding:"10px 0", borderRadius:11, border:"none", background:C.trackBg, color:C.muted, fontSize:13, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>
             Cancel
           </button>
           <button onClick={()=>val.trim()&&onConfirm(val.trim())} disabled={!val.trim()}
@@ -229,7 +258,7 @@ export default function App() {
 
   const [name, setName] = useState(DEFAULTS.name);
   const [font, setFont] = useState(DEFAULTS.font);
-  const [textSize, setTextSize] = useState(DEFAULTS.textSize);
+  const [textCapHeight, setTextCapHeight] = useState(DEFAULTS.textCapHeight);
   const [textHeight, setTextHeight] = useState(DEFAULTS.textHeight);
   const [borderHeight, setBorderHeight] = useState(DEFAULTS.borderHeight);
   const [borderOffset, setBorderOffset] = useState(DEFAULTS.borderOffset);
@@ -239,17 +268,27 @@ export default function App() {
   const [tabYOffset, setTabYOffset] = useState(DEFAULTS.tabYOffset);
   const [borderColor, setBorderColor] = useState(DEFAULTS.borderColor);
   const [textColor, setTextColor] = useState(DEFAULTS.textColor);
-  const [colorsLoaded, setColorsLoaded] = useState(false);
+  const colorsLoadedRef = useRef(false);
   const [fontsReady, setFontsReady] = useState(false);
   const [status, setStatus] = useState("loading");
   const [exporting, setExporting] = useState(false);
   const [exportModal, setExportModal] = useState(null);
 
-  useEffect(() => { readSavedColors().then(s => { if(s?.borderColor) setBorderColor(s.borderColor); if(s?.textColor) setTextColor(s.textColor); setColorsLoaded(true); }); }, []);
-  useEffect(() => { if(colorsLoaded) persistColors(borderColor, textColor); }, [borderColor, textColor, colorsLoaded]);
+  // BUG FIX: replaced colorsLoaded state with a ref so the persist effect can't
+  // fire before the async load completes. State updates are async and can race;
+  // a ref flip is synchronous inside the .then() callback, so by the time React
+  // re-renders and the persist effect runs, the ref is already true.
+  useEffect(() => {
+    readSavedColors().then(s => {
+      if (s?.borderColor) setBorderColor(s.borderColor);
+      if (s?.textColor)   setTextColor(s.textColor);
+      colorsLoadedRef.current = true;
+    });
+  }, []);
+  useEffect(() => { if (colorsLoadedRef.current) persistColors(borderColor, textColor); }, [borderColor, textColor]);
 
   const dName = useDebounce(name, 200);
-  const dTextSize = useDebounce(textSize, 80);
+  const dTextCapHeight = useDebounce(textCapHeight, 80);
   const dTextHeight = useDebounce(textHeight, 80);
   const dBorderHeight = useDebounce(borderHeight, 80);
   const dBorderOffset = useDebounce(borderOffset, 80);
@@ -262,12 +301,12 @@ export default function App() {
   const suggestedName = `${safeName}_${font.split(":")[0]}`;
 
   const anyDirty = useMemo(() => {
-    const v={name,font,textSize,textHeight,borderHeight,borderOffset,gap,tabDiameter,holeDiameter,tabYOffset,borderColor,textColor};
+    const v={name,font,textCapHeight,textHeight,borderHeight,borderOffset,gap,tabDiameter,holeDiameter,tabYOffset,borderColor,textColor};
     return Object.keys(DEFAULTS).some(k=>v[k]!==DEFAULTS[k]);
-  }, [name,font,textSize,textHeight,borderHeight,borderOffset,gap,tabDiameter,holeDiameter,tabYOffset,borderColor,textColor]);
+  }, [name,font,textCapHeight,textHeight,borderHeight,borderOffset,gap,tabDiameter,holeDiameter,tabYOffset,borderColor,textColor]);
 
   const resetAll = useCallback(() => {
-    setName(DEFAULTS.name); setFont(DEFAULTS.font); setTextSize(DEFAULTS.textSize); setTextHeight(DEFAULTS.textHeight);
+    setName(DEFAULTS.name); setFont(DEFAULTS.font); setTextCapHeight(DEFAULTS.textCapHeight); setTextHeight(DEFAULTS.textHeight);
     setBorderHeight(DEFAULTS.borderHeight); setBorderOffset(DEFAULTS.borderOffset); setGap(DEFAULTS.gap);
     setTabDiameter(DEFAULTS.tabDiameter); setHoleDiameter(DEFAULTS.holeDiameter); setTabYOffset(DEFAULTS.tabYOffset);
     setBorderColor(DEFAULTS.borderColor); setTextColor(DEFAULTS.textColor);
@@ -335,7 +374,22 @@ export default function App() {
     setStatus("building"); clearGroup();
     const tid=setTimeout(()=>{
       try{
-        const svgPath=otFont.getPath(safeName,0,0,dTextSize).toPathData(2);
+        // Compute fontSize so the text bounding box height exactly equals dTextCapHeight mm.
+        // Strategy: render at em = dTextCapHeight, measure actual bbox Y-extent,
+        // then scale fontSize proportionally so measured height == dTextCapHeight.
+        const probePath = otFont.getPath(safeName, 0, 0, dTextCapHeight).toPathData(2);
+        const probeData = new SVGLoader().parse(`<svg xmlns="http://www.w3.org/2000/svg"><path d="${probePath}"/></svg>`);
+        const probeShapes = [];
+        probeData.paths.forEach(p => p.toShapes(true).forEach(s => probeShapes.push(s)));
+        let fontSize = dTextCapHeight;
+        if (probeShapes.length) {
+          const probeGeo = new THREE.ExtrudeGeometry(probeShapes, { depth: 1, bevelEnabled: false });
+          probeGeo.computeBoundingBox();
+          const measuredH = probeGeo.boundingBox.max.y - probeGeo.boundingBox.min.y;
+          probeGeo.dispose();
+          if (measuredH > 0) fontSize = dTextCapHeight * (dTextCapHeight / measuredH);
+        }
+        const svgPath=otFont.getPath(safeName,0,0,fontSize).toPathData(2);
         const svgData=new SVGLoader().parse(`<svg xmlns="http://www.w3.org/2000/svg"><path d="${svgPath}"/></svg>`);
         const shapes=[]; svgData.paths.forEach(p=>p.toShapes(true).forEach(s=>shapes.push(s)));
         if(!shapes.length)return;
@@ -348,7 +402,8 @@ export default function App() {
         const bb=baseGeo.boundingBox; baseGeo.translate(-(bb.max.x+bb.min.x)/2,-(bb.max.y+bb.min.y)/2,0);
         baseGeo.computeBoundingBox(); const baseB=baseGeo.boundingBox;
         const tabGeo=makeTabGeo(dTabD/2,dHoleD/2,dBorderHeight,40);
-        tabGeo.translate(baseB.min.x-dGap-dTabD/2,-dTabY,0);
+        // BUG FIX: was -dTabY (inverted sign). Positive offset → tab moves up (+Y).
+        tabGeo.translate(baseB.min.x-dGap-dTabD/2,dTabY,0);
         clearGroup();
         const baseMat=new THREE.MeshPhongMaterial({color:borderColor,shininess:80});
         const textMat=new THREE.MeshPhongMaterial({color:textColor,shininess:100});
@@ -366,7 +421,7 @@ export default function App() {
       }catch(e){console.error(e);setStatus("error");}
     },0);
     return ()=>clearTimeout(tid);
-  },[fontsReady,safeName,font,dTextSize,dTextHeight,dBorderHeight,dBorderOffset,dGap,dTabD,dHoleD,dTabY,borderColor,textColor,clearGroup]);
+  },[fontsReady,safeName,font,dTextCapHeight,dTextHeight,dBorderHeight,dBorderOffset,dGap,dTabD,dHoleD,dTabY,borderColor,textColor,clearGroup]);
 
   useEffect(()=>{
     const {base,tab,text}=meshRef.current;
@@ -436,7 +491,7 @@ export default function App() {
   // FIX 4: clearer status label
   const statusLabel = status==="ready"?"Ready":status==="error"?"Error":status==="building"?"Rebuilding…":"Loading fonts…";
 
-  const inp = { width:"100%", padding:"9px 12px", background:C.inputBg, border:`1.5px solid ${C.inputBorder}`, borderRadius:12, color:C.text, fontFamily:"'Montserrat',sans-serif", fontSize:13, outline:"none", transition:"border-color 0.2s" };
+  const inp = { width:"100%", padding:"9px 12px", background:C.inputBg, border:"none", borderRadius:12, color:C.text, fontFamily:"'Montserrat',sans-serif", fontSize:13, outline:"none", transition:"border-color 0.2s" };
 
   return (
     <div style={{ height:"100vh", overflow:"hidden", background:C.bg, fontFamily:"'Montserrat',sans-serif", color:C.text, transition:"background 0.3s,color 0.3s", display:"flex", flexDirection:"column" }}>
@@ -491,7 +546,7 @@ export default function App() {
                 <div style={{ fontSize:10, color:C.muted, marginTop:2 }}>follows system by default</div>
               </div>
               <button onClick={()=>setDarkMode(d=>!d)} title={darkMode?"Switch to light":"Switch to dark"}
-                style={{ width:42, height:24, borderRadius:20, border:`1.5px solid ${C.border}`, cursor:"pointer", background:darkMode?`linear-gradient(90deg,${C.accent},${C.accent2})`:"#f0e6df", position:"relative", transition:"background 0.3s", padding:0, flexShrink:0 }}>
+                style={{ width:42, height:24, borderRadius:20, border:"none", cursor:"pointer", background:darkMode?`linear-gradient(90deg,${C.accent},${C.accent2})`:"#f0e6df", position:"relative", transition:"background 0.3s", padding:0, flexShrink:0 }}>
                 <div style={{ position:"absolute", top:2, left:darkMode?18:2, width:18, height:18, borderRadius:"50%", background:"white", boxShadow:"0 1px 4px #0003", transition:"left 0.2s", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10 }}>
                   {darkMode?"🌙":"☀️"}
                 </div>
@@ -502,8 +557,8 @@ export default function App() {
             <ColorRow label="Text" value={textColor} defaultValue={DEFAULTS.textColor} onChange={setTextColor} C={C} />
 
             <SectionHeader label="Text" C={C} />
-            <SliderRow label="Size" value={textSize} min={8} max={40} step={0.5} onChange={setTextSize} defaultValue={DEFAULTS.textSize} C={C} />
-            <SliderRow label="Height" value={textHeight} min={0.5} max={10} step={0.5} onChange={setTextHeight} defaultValue={DEFAULTS.textHeight} C={C} />
+            <SliderRow label="Font Height" value={textCapHeight} min={5} max={60} step={0.5} onChange={setTextCapHeight} defaultValue={DEFAULTS.textCapHeight} C={C} />
+            <SliderRow label="Depth" value={textHeight} min={0.5} max={10} step={0.5} onChange={setTextHeight} defaultValue={DEFAULTS.textHeight} C={C} />
 
             <SectionHeader label="Base" C={C} />
             <SliderRow label="Height" value={borderHeight} min={0.5} max={10} step={0.5} onChange={setBorderHeight} defaultValue={DEFAULTS.borderHeight} C={C} />
@@ -520,7 +575,7 @@ export default function App() {
             <button onClick={resetAll}
               onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor=anyDirty?C.accent:C.border;e.currentTarget.style.color=anyDirty?C.accent:C.muted;}}
-              style={{ width:"100%", marginTop:20, marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"9px 0", borderRadius:12, background:anyDirty?C.pill:"none", border:`1.5px solid ${anyDirty?C.accent:C.border}`, color:anyDirty?C.accent:C.muted, fontSize:11, fontWeight:600, fontFamily:"inherit", cursor:"pointer", transition:"all 0.2s" }}>
+              style={{ width:"100%", marginTop:20, marginBottom:10, display:"flex", alignItems:"center", justifyContent:"center", gap:6, padding:"9px 0", borderRadius:12, background:anyDirty?C.pill:"none", border:`1.5px solid ${anyDirty?C.accent:"transparent"}`, color:anyDirty?C.accent:C.muted, fontSize:11, fontWeight:600, fontFamily:"inherit", cursor:"pointer", transition:"all 0.2s" }}>
               ↺ Reset all settings
             </button>
 
@@ -533,7 +588,7 @@ export default function App() {
                   disabled={!fontsReady||exporting}
                   onMouseEnter={e=>fontsReady&&!exporting&&(e.currentTarget.style.transform="translateY(-1px)")}
                   onMouseLeave={e=>(e.currentTarget.style.transform="none")}
-                  style={{ padding:"11px 0 9px", fontSize:11, fontWeight:700, fontFamily:"inherit", letterSpacing:"0.06em", textTransform:"uppercase", background:fontsReady&&!exporting?grad:C.border, color:fontsReady&&!exporting?"white":C.muted, border:"none", borderRadius:14, cursor:fontsReady&&!exporting?"pointer":"not-allowed", boxShadow:fontsReady&&!exporting?`0 4px 14px ${C.shadow}`:"none", transition:"all 0.2s" }}>
+                  style={{ padding:"11px 0 9px", fontSize:11, fontWeight:700, fontFamily:"inherit", letterSpacing:"0.06em", textTransform:"uppercase", background:fontsReady&&!exporting?grad:C.trackBg, color:fontsReady&&!exporting?"white":C.muted, border:"none", borderRadius:14, cursor:fontsReady&&!exporting?"pointer":"not-allowed", boxShadow:fontsReady&&!exporting?`0 4px 14px ${C.shadow}`:"none", transition:"all 0.2s" }}>
                   Export {label}
                   <div style={{ fontSize:9, fontWeight:400, opacity:0.8, marginTop:2 }}>{note}</div>
                 </button>
@@ -542,7 +597,7 @@ export default function App() {
 
             {/* FIX 4: Status badge pulses while building */}
             <div style={{ marginTop:14, display:"flex", justifyContent:"center" }}>
-              <div style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 14px", borderRadius:20, background:`${statusColor}18`, border:`1px solid ${statusColor}55`, animation:isBuilding?"kc-pulse 1.2s ease-in-out infinite":undefined }}>
+              <div style={{ display:"inline-flex", alignItems:"center", gap:6, padding:"4px 14px", borderRadius:20, background:`${statusColor}18`, border:"none", animation:isBuilding?"kc-pulse 1.2s ease-in-out infinite":undefined }}>
                 <div style={{ width:6, height:6, borderRadius:"50%", background:statusColor, boxShadow:`0 0 5px ${statusColor}` }} />
                 <span style={{ fontSize:10, fontWeight:600, color:statusColor, letterSpacing:"0.08em", textTransform:"uppercase" }}>
                   {exporting?"Exporting…":statusLabel}
@@ -553,13 +608,13 @@ export default function App() {
 
           {/* ── Viewport Panel ── */}
           <div style={{ background:C.surface, borderRadius:20, overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:`0 4px 28px ${C.shadow2}`, transition:"background 0.3s" }}>
-            <div style={{ padding:"12px 18px", borderBottom:`1px solid ${C.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ padding:"12px 18px", borderBottom:"none", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <span style={{ fontSize:11, fontWeight:600, color:C.muted, textTransform:"uppercase", letterSpacing:"0.08em" }}>3D Preview</span>
               <div style={{ display:"flex", alignItems:"center", gap:12 }}>
                 <span style={{ fontSize:10, color:C.muted }}>drag to rotate · scroll to zoom</span>
                 {/* FIX 5: Reset camera button */}
                 <button onClick={resetCamera} title="Reset camera view"
-                  style={{ fontSize:10, fontWeight:600, color:C.muted, background:"none", border:`1px solid ${C.border}`, borderRadius:8, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" }}
+                  style={{ fontSize:10, fontWeight:600, color:C.muted, background:"none", border:"none", borderRadius:8, padding:"3px 10px", cursor:"pointer", fontFamily:"inherit", transition:"all 0.15s" }}
                   onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.color=C.accent;}}
                   onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.muted;}}>
                   ⟳ Reset view
